@@ -1,7 +1,9 @@
 import os
+import re
 import shutil
 import subprocess
 import time
+import wave
 from pathlib import Path
 
 try:
@@ -9,7 +11,7 @@ try:
 except ImportError:
     sr = None
 
-from .config import AUDIO_DIR
+from .config import AUDIO_DIR, IS_WINDOWS
 
 TTS_UNUSABLE = False
 
@@ -19,6 +21,8 @@ def record(duration, path):
     path = os.path.abspath(path)
     if os.path.exists(path):
         os.remove(path)
+    if IS_WINDOWS:
+        return _record_windows(duration, path)
     try:
         subprocess.run(
             ["termux-microphone-record", "-l", str(int(max(duration, 1))), "-f", path],
@@ -32,6 +36,29 @@ def record(duration, path):
     return path
 
 
+def _record_windows(duration, path):
+    try:
+        import numpy as np
+        import sounddevice as sd
+    except ImportError:
+        return None
+    try:
+        sample_rate = 16000
+        frames = int(duration * sample_rate)
+        audio = sd.rec(frames, samplerate=sample_rate, channels=1, dtype="int16")
+        sd.wait()
+        with wave.open(path, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(sample_rate)
+            wav.writeframes(np.asarray(audio, dtype="int16").tobytes())
+    except Exception:
+        return None
+    if os.path.exists(path) and os.path.getsize(path) >= 1024:
+        return path
+    return None
+
+
 def _models_dir(cfg):
     return Path(
         os.path.expanduser((cfg.get("local", {}) or {}).get("models_dir", "~/.arynox/models"))
@@ -39,6 +66,12 @@ def _models_dir(cfg):
 
 
 def whisper_available(cfg):
+    if IS_WINDOWS:
+        try:
+            import faster_whisper  # noqa: F401
+        except ImportError:
+            return False
+        return True
     if shutil.which("whisper-cli") is None:
         return False
     model = str(cfg.get("whisper_model") or "")
@@ -47,7 +80,34 @@ def whisper_available(cfg):
     return (_models_dir(cfg) / model).exists()
 
 
+_FASTER_MODEL = None
+
+
+def _faster_model(size):
+    global _FASTER_MODEL
+    if _FASTER_MODEL is None:
+        from faster_whisper import WhisperModel
+
+        _FASTER_MODEL = WhisperModel(size, device="cpu", compute_type="int8")
+    return _FASTER_MODEL
+
+
 def whisper_transcribe(path, cfg):
+    if IS_WINDOWS:
+        try:
+            from faster_whisper import WhisperModel  # noqa: F401
+        except ImportError:
+            return None
+        size = str(cfg.get("whisper_model") or "ggml-base.bin")
+        size = re.sub(r"ggml-(.+)\.bin", r"\1", size).replace(".en", "").strip()
+        lang = str(cfg.get("language", "en-US"))[:2]
+        try:
+            model = _faster_model(size)
+            segments, _ = model.transcribe(os.path.abspath(path), language=lang)
+            text = "".join(seg.text for seg in segments).strip()
+            return text or None
+        except Exception:
+            return None
     model = str(cfg.get("whisper_model") or "ggml-base.bin")
     model_path = _models_dir(cfg) / model
     if not model_path.exists():
@@ -155,19 +215,41 @@ def speak(text, cfg):
     for chunk in _chunks(text):
         ok = False
         if not TTS_UNUSABLE:
-            ok = _speak_tts(chunk, rate, lang)
+            ok = _speak_termux(chunk, rate, lang)
             if not ok:
                 TTS_UNUSABLE = True
+        if not ok:
+            ok = _speak_windows(chunk)
         if not ok:
             _speak_espeak(chunk, lang)
 
 
-def _speak_tts(text, rate, lang):
+def _speak_termux(text, rate, lang):
     try:
         result = subprocess.run(
             ["termux-tts-speak", "-r", rate, "-l", lang, text], timeout=120
         )
         return result.returncode == 0
+    except Exception:
+        return False
+
+
+_WIN_TTS = None
+
+
+def _speak_windows(text):
+    if not IS_WINDOWS:
+        return False
+    global _WIN_TTS
+    try:
+        import pyttsx3
+
+        if _WIN_TTS is None:
+            _WIN_TTS = pyttsx3.init()
+            _WIN_TTS.setProperty("rate", 180)
+        _WIN_TTS.say(text)
+        _WIN_TTS.runAndWait()
+        return True
     except Exception:
         return False
 

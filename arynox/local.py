@@ -4,7 +4,7 @@ import subprocess
 
 import requests
 
-from .config import DATA_DIR
+from .config import DATA_DIR, IS_WINDOWS
 
 
 class Local:
@@ -93,7 +93,10 @@ def stop_server(cfg):
     if not local_cfg.get("enabled"):
         return
     try:
-        subprocess.run(["pkill", "-f", "llama-server"], capture_output=True)
+        if IS_WINDOWS:
+            subprocess.run(["taskkill", "/F", "/IM", "llama-server.exe"], capture_output=True)
+        else:
+            subprocess.run(["pkill", "-f", "llama-server"], capture_output=True)
     except Exception:
         pass
 
@@ -107,11 +110,14 @@ def ensure_server(cfg):
     probe = Local(cfg)
     if probe.healthy():
         return True
-    script = DATA_DIR / "start-local.sh"
+    script = DATA_DIR / ("start-local.cmd" if IS_WINDOWS else "start-local.sh")
     if not script.exists():
         return False
     try:
-        subprocess.run(["bash", str(script)], timeout=300)
+        if IS_WINDOWS:
+            subprocess.run(["cmd", "/c", str(script)], timeout=300)
+        else:
+            subprocess.run(["bash", str(script)], timeout=300)
     except Exception:
         return False
     return probe.healthy()

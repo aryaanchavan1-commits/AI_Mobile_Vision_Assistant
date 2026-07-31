@@ -1,6 +1,9 @@
 import json
 import os
+import sys
 from pathlib import Path
+
+IS_WINDOWS = sys.platform == "win32"
 
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 DATA_DIR = Path(os.environ.get("ARYNOX_DIR", str(HOME / ".arynox")))

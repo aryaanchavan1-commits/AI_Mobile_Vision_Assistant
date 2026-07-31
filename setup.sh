@@ -129,6 +129,25 @@ if [ -n "$TIER" ]; then
   }
   LLAMA_SRC="$HOME/llama.cpp"
   if [ -n "$TIER" ] && ! command -v llama-server >/dev/null 2>&1; then
+    echo "  Trying the official prebuilt Android build (fast path)"
+    ASSET_URL=$(curl -sL "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest" | grep -o 'https://[^"]*bin-android-arm64\.tar\.gz' | head -1)
+    if [ -n "$ASSET_URL" ]; then
+      if curl -L --fail -o "$APP_DIR/llama-android.tar.gz" "$ASSET_URL" 2>/dev/null; then
+        tar -xzf "$APP_DIR/llama-android.tar.gz" -C "$APP_DIR" 2>/dev/null || true
+        rm -f "$APP_DIR/llama-android.tar.gz"
+        BIN_DIR=$(find "$APP_DIR" -maxdepth 2 -type d -name "bin" | head -1)
+        if [ -n "$BIN_DIR" ] && [ -f "$BIN_DIR/llama-server" ]; then
+          cp -r "$BIN_DIR/." "$PREFIX/bin/"
+          chmod +x "$PREFIX/bin/llama-server"
+          if command -v llama-server >/dev/null 2>&1; then
+            llama-server --version > /dev/null 2>&1 || { rm -f "$PREFIX/bin/llama-server"; }
+          fi
+        fi
+        rm -rf "$APP_DIR"/llama-*-bin-android-arm64
+      fi
+    fi
+  fi
+  if [ -n "$TIER" ] && ! command -v llama-server >/dev/null 2>&1; then
     if [ ! -d "$LLAMA_SRC/.git" ]; then
       echo "  Cloning llama.cpp (a few minutes, done once)"
       git clone --depth 1 https://github.com/ggml-org/llama.cpp "$LLAMA_SRC" || {
