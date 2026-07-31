@@ -95,9 +95,12 @@ class ArynoxBrain:
             self.speak("Stopping. Type bash run.sh start to wake me up.")
             return STOPPED
 
-        m = re.search(r"(?:remember|memorize|note down)\s*(?:this|that)?\s*(.*)", low)
+        m = re.search(
+            r"what do you remember$|show (?:me )?your memories|list (?:your )?memories|what have you remembered",
+            low,
+        )
         if m:
-            self.do_remember(m.group(1).strip() or "this person")
+            self.do_list()
             return
 
         m = (
@@ -108,6 +111,11 @@ class ArynoxBrain:
         if m:
             query = m.group(1) if m.lastindex == 1 else m.group(1) + " " + m.group(2)
             self.do_recall(query.strip())
+            return
+
+        m = re.search(r"(?:remember|memorize|note down)\s*(?:this|that)?\s*(.*)", low)
+        if m:
+            self.do_remember(m.group(1).strip() or "this person")
             return
 
         m = re.search(r"(?:forget|remove memory of)\s+(.+)", low)
@@ -145,14 +153,16 @@ class ArynoxBrain:
                 "I can see through your camera, hear you, answer questions, "
                 "remember people and things, open apps, search your files, and "
                 "check your battery. Try saying, what do you see, or remember "
-                "this person."
+                "this person. Ask, what do you remember, to hear my memory."
             )
             return
 
         self.ask_llm(text)
 
     def do_remember(self, phrase):
-        name = phrase[:40]
+        name = phrase.strip()[:40]
+        if not name or name.lower() in ("person", "them", "this", "him", "her", "someone"):
+            name = "this person"
         kind = "person" if _PERSON_WORDS.search(phrase) else "thing"
         self.speak("Let me take a look.")
         prompt = PERSON_PROMPT if kind == "person" else DESCRIBE_PROMPT
@@ -172,6 +182,14 @@ class ArynoxBrain:
                 f"I don't remember anything about {query or 'that'} yet. "
                 "Show me and say, remember this."
             )
+
+    def do_list(self):
+        rows = self.mem.list_memories(5)
+        if not rows:
+            self.speak("My memory is empty. Say, remember this, and I will remember.")
+            return
+        names = ", ".join(r["name"] for r in rows)
+        self.speak(f"I remember {len(rows)} things: {names}.")
 
     def do_forget(self, fragment):
         count = self.mem.forget(fragment)
