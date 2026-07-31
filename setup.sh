@@ -338,13 +338,18 @@ termux-setup-storage || true
 termux-wake-lock || true
 python3 "$APP_DIR/app/main.py" --demo || true
 
+grep -q 'alias start=' "$HOME/.bashrc" 2>/dev/null || echo 'alias start="bash '"$APP_DIR"'/run.sh start"' >> "$HOME/.bashrc"
+grep -q 'alias stop=' "$HOME/.bashrc" 2>/dev/null || echo 'alias stop="bash '"$APP_DIR"'/run.sh stop"' >> "$HOME/.bashrc"
+
 echo
 echo "Setup complete."
-echo "Start Arynox:     bash ~/.arynox/run.sh        (or: bash run.sh start)"
-echo "Stop Arynox:      say 'stop' to Arynox,        or: bash run.sh stop"
-echo "Check status:     bash ~/.arynox/run.sh status"
-echo "Self-test again:  bash ~/.arynox/run.sh start --demo"
-echo "Config file:      ~/.arynox/config.json"
+echo "To start Arynox later, just type:    start"
+echo "To stop it, say 'stop' to Arynox, or type: stop"
+echo "Status check: bash ~/.arynox/run.sh status"
+echo "Config file:  ~/.arynox/config.json"
+echo
+echo "Starting Arynox..."
+exec bash "$APP_DIR/run.sh" start
 echo
 echo "Offline capability:"
 echo "  - Vision + chat: llama-server (on-device)"

@@ -50,11 +50,16 @@ Type `none` to skip local models and use the Gemini cloud only.
 
 ## Run
 
+Setup ends by **starting Arynox automatically**. Later, just run:
+
 ```bat
-%USERPROFILE%\.arynox\run.cmd            rem start Arynox (default)
-%USERPROFILE%\.arynox\run.cmd status     rem check what is running
-%USERPROFILE%\.arynox\run.cmd stop       rem stop Arynox + local models
+start.cmd                      rem start Arynox again (or double-click)
+stop.cmd                       rem stop Arynox + local models
+status.cmd                     rem check what is running
 ```
+
+(`start.cmd` / `stop.cmd` / `status.cmd` live in `%USERPROFILE%\.arynox\` and
+call `run.cmd`. In WSL, `start` and `stop` are added to `~/.bashrc` instead.)
 
 Or just say **"stop"**, **"exit"**, **"goodbye"**, or **"go to sleep"** to Arynox -
 it will shut down and stop the AI servers itself.

@@ -57,11 +57,15 @@ Type `none` to skip local models and use the Gemini cloud only.
 
 ## Run
 
+Setup ends by **starting Arynox automatically**. Later, just type:
+
 ```bash
-bash ~/.arynox/run.sh            # start Arynox (default)
-bash ~/.arynox/run.sh status     # check what is running
-bash ~/.arynox/run.sh stop       # stop Arynox + local models
+start                          # start Arynox again
+stop                           # stop Arynox + local models
 ```
+
+(`start` and `stop` are aliases added to `~/.bashrc` by setup; they map to
+`bash ~/.arynox/run.sh start/stop`.)
 
 Or just say **"stop"**, **"exit"**, **"goodbye"**, or **"go to sleep"** to Arynox -
 it will shut down and stop the AI servers itself.

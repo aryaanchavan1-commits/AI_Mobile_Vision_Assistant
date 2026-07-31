@@ -259,9 +259,32 @@ def write_run_cmd(py):
         ")",
         'if /I "%1"=="start" shift',
         'call "%USERPROFILE%\\.arynox\\start-local.cmd"',
-        f'"{py}" main.py %*',
+        f'"{py}" main.py %1 %2 %3 %4 %5 %6 %7 %8 %9',
     ]
     (APP_DIR / "run.cmd").write_text("\r\n".join(lines) + "\r\n")
+
+
+def write_shortcuts():
+    """start.cmd / stop.cmd / status.cmd on Windows, start/stop aliases in WSL."""
+    if IS_WINDOWS:
+        run = APP_DIR / "run.cmd"
+        (APP_DIR / "start.cmd").write_text(
+            f'@echo off\r\ncall "{run}" start\r\n', encoding="utf-8")
+        (APP_DIR / "stop.cmd").write_text(
+            f'@echo off\r\ncall "{run}" stop\r\n', encoding="utf-8")
+        (APP_DIR / "status.cmd").write_text(
+            f'@echo off\r\ncall "{run}" status\r\n', encoding="utf-8")
+    else:
+        bashrc = Path.home() / ".bashrc"
+        lines = [
+            f'alias start="bash {APP_DIR / "run.sh"} start"',
+            f'alias stop="bash {APP_DIR / "run.sh"} stop"',
+        ]
+        for line in lines:
+            alias = line.split("=", 1)[0]
+            if bashrc.exists() and any(alias in l for l in bashrc.read_text(encoding="utf-8").splitlines()):
+                continue
+            bashrc.write_text((bashrc.read_text(encoding="utf-8") + line + "\n") if bashrc.exists() else line + "\n", encoding="utf-8")
 
 
 def write_start_sh(tier_cfg, py):
@@ -422,25 +445,34 @@ def main():
         write_run_cmd(py)
     else:
         write_run_sh(py)
+    write_shortcuts()
 
     print()
     print("Setup complete.")
     if IS_WINDOWS:
-        print(f"  Start:   {APP_DIR}\\run.cmd          (or: run.cmd start)")
-        print(f"  Stop:    say 'stop' to Arynox,  or: run.cmd stop")
-        print(f"  Status:  run.cmd status")
-        print(f"  Demo:    cd {APP_DIR}\\app && \"{py}\" main.py --demo")
+        print("  Start:   start.cmd   or: run.cmd start   (or double-click start.cmd)")
+        print("  Stop:    say 'stop' to Arynox, or: stop.cmd  /  run.cmd stop")
+        print("  Status:  status.cmd / run.cmd status")
     else:
-        print(f"  Start:   bash {APP_DIR}/run.sh")
-        print(f"  Stop:    say 'stop' to Arynox,  or: bash {APP_DIR}/run.sh stop")
-        print(f"  Status:  bash {APP_DIR}/run.sh status")
-        print(f"  Demo:    cd {APP_DIR}/app && \"{py}\" main.py --demo")
+        print("  Start:   type 'start'")
+        print("  Stop:    say 'stop' to Arynox, or type 'stop'")
+        print("  Status:  bash ~/.arynox/run.sh status")
     print()
     print("Offline: vision/chat/memory on-device; speech-to-text via")
     print("faster-whisper (downloads its model on first use, then offline).")
     if is_wsl():
         print("In WSL: typed mode is automatic (no mic/camera).")
     print("First camera/mic use will ask for permission.")
+
+    print()
+    print("Hardware self-test...")
+    demo = subprocess.run([py, str(app_dir / "main.py"), "--demo"], cwd=str(app_dir))
+    print()
+    print("Starting Arynox...")
+    if IS_WINDOWS:
+        subprocess.run(["cmd", "/c", str(APP_DIR / "run.cmd")])
+    else:
+        subprocess.run(["bash", str(APP_DIR / "run.sh")])
 
 
 if __name__ == "__main__":
