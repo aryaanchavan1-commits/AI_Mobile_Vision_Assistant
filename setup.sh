@@ -67,9 +67,9 @@ fi
 
 echo "[4/7] Local AI models (chosen for your RAM)"
 echo "  lite     ~1.1 GB   text-only 1.5B model (4 GB RAM or less)"
-echo "  standard ~5.5 GB   3B vision model, sees and talks (4-8 GB RAM)"
-echo "  pro      ~6.3 GB   7B vision model (8-16 GB RAM)"
-echo "  max      ~6.3 GB   7B vision, large context (16 GB+ RAM)"
+echo "  standard ~3.3 GB   3B vision model, sees and talks (4-8 GB RAM)"
+echo "  pro      ~5.9 GB   7B vision model (8-16 GB RAM)"
+echo "  max      ~5.9 GB   7B vision, large context (16 GB+ RAM)"
 echo "  none     no downloads, uses Gemini cloud instead"
 read -rp "  Choose tier [$AUTO_TIER]: " TIER
 TIER="${TIER:-$AUTO_TIER}"
@@ -81,25 +81,25 @@ case "$TIER" in
     MM=""; EMB=""; CTX=2048
     ;;
   standard)
-    LLM_NAME="qwen2.5-vl-3b-instruct-q4_k_m.gguf"
-    LLM_URL="https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/qwen2.5-vl-3b-instruct-q4_k_m.gguf"
-    MM="qwen2.5-vl-3b-instruct-mmproj-f16.gguf"
-    MM_URL="https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/qwen2.5-vl-3b-instruct-mmproj-f16.gguf"
-    EMB="bge-small-en-v1.5-q5_k_m.gguf"; CTX=2048
+    LLM_NAME="Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+    LLM_URL="https://huggingface.co/unsloth/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+    MM="mmproj-F16.gguf"
+    MM_URL="https://huggingface.co/unsloth/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/mmproj-F16.gguf"
+    EMB="bge-small-en-v1.5-q4_k_m.gguf"; CTX=2048
     ;;
   pro)
-    LLM_NAME="qwen2.5-vl-7b-instruct-q4_k_m.gguf"
-    LLM_URL="https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/qwen2.5-vl-7b-instruct-q4_k_m.gguf"
-    MM="qwen2.5-vl-7b-instruct-mmproj-f16.gguf"
-    MM_URL="https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/qwen2.5-vl-7b-instruct-mmproj-f16.gguf"
-    EMB="bge-small-en-v1.5-q5_k_m.gguf"; CTX=2048
+    LLM_NAME="Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
+    LLM_URL="https://huggingface.co/unsloth/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
+    MM="mmproj-F16.gguf"
+    MM_URL="https://huggingface.co/unsloth/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/mmproj-F16.gguf"
+    EMB="bge-small-en-v1.5-q4_k_m.gguf"; CTX=2048
     ;;
   max)
-    LLM_NAME="qwen2.5-vl-7b-instruct-q4_k_m.gguf"
-    LLM_URL="https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/qwen2.5-vl-7b-instruct-q4_k_m.gguf"
-    MM="qwen2.5-vl-7b-instruct-mmproj-f16.gguf"
-    MM_URL="https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/qwen2.5-vl-7b-instruct-mmproj-f16.gguf"
-    EMB="bge-small-en-v1.5-q5_k_m.gguf"; CTX=4096
+    LLM_NAME="Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
+    LLM_URL="https://huggingface.co/unsloth/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
+    MM="mmproj-F16.gguf"
+    MM_URL="https://huggingface.co/unsloth/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/mmproj-F16.gguf"
+    EMB="bge-small-en-v1.5-q4_k_m.gguf"; CTX=4096
     ;;
   none)
     TIER=""
@@ -113,8 +113,8 @@ esac
 if [ -n "$TIER" ]; then
   case "$TIER" in
     lite) NEED_MB=3000 ;;
-    standard) NEED_MB=8000 ;;
-    *) NEED_MB=9000 ;;
+    standard) NEED_MB=6000 ;;
+    *) NEED_MB=8000 ;;
   esac
   if [ "${STORAGE_MB:-0}" -gt 0 ] && [ "$STORAGE_MB" -lt "$NEED_MB" ]; then
     echo "  Warning: only ${STORAGE_MB} MB free, this tier needs ~${NEED_MB} MB."
@@ -161,7 +161,7 @@ if [ -n "$TIER" ]; then
   download "$LLM_NAME" "$LLM_URL" || echo "  FAILED: $LLM_NAME"
   if [ -n "$MM" ]; then download "$MM" "$MM_URL" || echo "  FAILED: $MM"; fi
   if [ -n "$EMB" ]; then
-    download "$EMB" "https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/resolve/main/bge-small-en-v1.5-q5_k_m.gguf" || echo "  FAILED: $EMB"
+    download "$EMB" "https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/resolve/main/bge-small-en-v1.5-q4_k_m.gguf" || echo "  FAILED: $EMB"
   fi
   echo "  Installed model files:"
   for f in "$MODELS_DIR"/*.gguf; do
@@ -195,7 +195,7 @@ if ! command -v whisper-cli >/dev/null 2>&1; then
   fi
 fi
 if [ -n "$WHISPER_MODEL" ] && command -v whisper-cli >/dev/null 2>&1; then
-  download "$WHISPER_MODEL" "https://huggingface.co/ggml-org/whisper.cpp/resolve/main/$WHISPER_MODEL" || echo "  FAILED: $WHISPER_MODEL"
+  download "$WHISPER_MODEL" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$WHISPER_MODEL" || echo "  FAILED: $WHISPER_MODEL"
 fi
 
 echo "[5/7] Installing Python packages"
