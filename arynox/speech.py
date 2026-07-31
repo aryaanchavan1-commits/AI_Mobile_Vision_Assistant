@@ -175,6 +175,18 @@ def transcribe(path, cfg):
     return text
 
 
+def mic_ready(cfg):
+    if IS_WINDOWS:
+        try:
+            import sounddevice as sd
+
+            devices = sd.query_devices()
+            return any(d.get("max_input_channels", 0) > 0 for d in devices)
+        except Exception:
+            return False
+    return shutil.which("termux-microphone-record") is not None
+
+
 def listen_once(cfg):
     block = int(cfg.get("listen_block_seconds", 4))
     limit = int(cfg.get("listen_max_seconds", 30))
@@ -221,7 +233,9 @@ def speak(text, cfg):
         if not ok:
             ok = _speak_windows(chunk)
         if not ok:
-            _speak_espeak(chunk, lang)
+            ok = _speak_espeak(chunk, lang)
+        if not ok:
+            print("Arynox:", chunk, flush=True)
 
 
 def _speak_termux(text, rate, lang):
@@ -256,9 +270,10 @@ def _speak_windows(text):
 
 def _speak_espeak(text, lang):
     try:
-        subprocess.run(["espeak-ng", "-v", lang, "-s", "170", text], timeout=120)
+        result = subprocess.run(["espeak-ng", "-v", lang, "-s", "170", text], timeout=120)
+        return result.returncode == 0
     except Exception:
-        pass
+        return False
 
 
 def _chunks(text, size=400):

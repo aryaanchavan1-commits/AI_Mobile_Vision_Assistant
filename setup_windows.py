@@ -1,43 +1,70 @@
 import ctypes
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 
 import requests
 
-from arynox.models import LLAMA_ASSET_PATTERN, TIERS, WHISPER_MODELS
+from arynox.config import IS_WINDOWS
+from arynox.models import LINUX_ASSET_PATTERN, LLAMA_ASSET_PATTERN, TIERS, WHISPER_MODELS
 
 APP_DIR = Path.home() / ".arynox"
 MODELS_DIR = APP_DIR / "models"
 LLAMA_DIR = APP_DIR / "llama"
+VENV_DIR = APP_DIR / "venv"
 REPO_DIR = Path(__file__).resolve().parent
+
+SERVER_NAME = "llama-server.exe" if IS_WINDOWS else "llama-server"
+
+
+def is_wsl():
+    try:
+        return "microsoft" in (platform.uname().release or "").lower()
+    except Exception:
+        return False
+
+
+def venv_python():
+    return VENV_DIR / ("Scripts/python.exe" if IS_WINDOWS else "bin/python")
 
 
 def detect_ram_gb():
-    try:
-        class MEMORYSTATUSEX(ctypes.Structure):
-            _fields_ = [
-                ("dwLength", ctypes.c_ulong),
-                ("dwMemoryLoad", ctypes.c_ulong),
-                ("ullTotalPhys", ctypes.c_ulonglong),
-                ("ullAvailPhys", ctypes.c_ulonglong),
-                ("ullTotalPageFile", ctypes.c_ulonglong),
-                ("ullAvailPageFile", ctypes.c_ulonglong),
-                ("ullTotalVirtual", ctypes.c_ulonglong),
-                ("ullAvailVirtual", ctypes.c_ulonglong),
-                ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
-            ]
+    if IS_WINDOWS:
+        try:
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
 
-        status = MEMORYSTATUSEX()
-        status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
-        return round(status.ullTotalPhys / 1e9, 1)
+            status = MEMORYSTATUSEX()
+            status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
+            return round(status.ullTotalPhys / 1e9, 1)
+        except Exception:
+            return 0.0
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    kb = int(line.split()[1])
+                    return round(kb / 1024 / 1024, 1)
     except Exception:
-        return 0.0
+        pass
+    return 0.0
 
 
 def auto_tier(ram_gb):
@@ -59,24 +86,49 @@ def free_gb():
 
 def download(name, url, dest_dir):
     dest = dest_dir / name
+    mode = "wb"
+    headers = {}
     if dest.exists() and dest.stat().st_size > 0:
-        print(f"  {name} already downloaded")
-        return True
-    print(f"  Downloading {name}")
+        headers["Range"] = f"bytes={dest.stat().st_size}-"
+        mode = "ab"
     try:
-        with requests.get(url, stream=True, timeout=(15, 600)) as resp:
-            resp.raise_for_status()
-            with open(dest, "wb") as f:
+        with requests.get(url, stream=True, headers=headers, timeout=(15, 600)) as resp:
+            if resp.status_code == 416:
+                print(f"  {name} already downloaded")
+                return True
+            if resp.status_code == 206:
+                mode = "ab"
+            elif resp.status_code == 200:
+                mode = "wb"
+            else:
+                print(f"  FAILED: {name} (HTTP {resp.status_code})")
+                return False
+            resume_from = dest.stat().st_size if mode == "ab" else 0
+            total = resume_from + int(resp.headers.get("Content-Length") or 0)
+            if total and resume_from >= total and resume_from > 0:
+                print(f"  {name} already downloaded")
+                return True
+            print(f"  Downloading {name}")
+            written = resume_from
+            with open(dest, mode) as f:
                 for chunk in resp.iter_content(1 << 20):
                     f.write(chunk)
-        return True
+                    written += len(chunk)
+                    if written // (50 << 20) > (written - len(chunk)) // (50 << 20):
+                        mb = written >> 20
+                        print(f"    {mb} MB / {total >> 20} MB", flush=True)
+            return True
+    except KeyboardInterrupt:
+        print(f"\n  Interrupted - partial file kept, re-run setup to resume.")
+        return False
     except Exception as exc:
         print(f"  FAILED: {name} ({exc})")
         return False
 
 
 def download_llama_cpp():
-    if (LLAMA_DIR / "llama-server.exe").exists():
+    exe = LLAMA_DIR / SERVER_NAME
+    if exe.exists():
         print("  llama.cpp already downloaded")
         return True
     print("  Fetching latest llama.cpp release")
@@ -86,57 +138,99 @@ def download_llama_cpp():
         timeout=30,
     )
     resp.raise_for_status()
+    pattern = LLAMA_ASSET_PATTERN if IS_WINDOWS else LINUX_ASSET_PATTERN
     asset = None
     for item in resp.json().get("assets", []):
-        if item["name"].endswith(LLAMA_ASSET_PATTERN):
+        if item["name"].endswith(pattern):
             asset = item
             break
     if asset is None:
-        print("  FAILED: no Windows x64 llama.cpp release asset found")
+        print(f"  FAILED: no release asset matching {pattern}")
         return False
-    zip_path = APP_DIR / asset["name"]
-    download(asset["name"], asset["browser_download_url"], APP_DIR)
+    archive = APP_DIR / asset["name"]
+    if not download(asset["name"], asset["browser_download_url"], APP_DIR):
+        return False
     print(f"  Extracting {asset['name']}")
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(LLAMA_DIR)
-    zip_path.unlink(missing_ok=True)
+    LLAMA_DIR.mkdir(parents=True, exist_ok=True)
+    if str(archive).endswith(".zip"):
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(LLAMA_DIR)
+    else:
+        with tarfile.open(archive, "r:gz") as tf:
+            tf.extractall(LLAMA_DIR)
+    archive.unlink(missing_ok=True)
     for root, _, files in os.walk(LLAMA_DIR):
         for name in files:
-            if name == "llama-server.exe":
-                shutil.move(os.path.join(root, name), LLAMA_DIR / name)
-    return (LLAMA_DIR / "llama-server.exe").exists()
+            if name == SERVER_NAME:
+                target = LLAMA_DIR / name
+                if os.path.abspath(os.path.join(root, name)) != os.path.abspath(target):
+                    shutil.move(os.path.join(root, name), target)
+    return exe.exists()
 
 
-def write_start_cmd(tier_cfg):
-    exe = LLAMA_DIR / "llama-server.exe"
-    llm_name, _ = tier_cfg["llm"]
-    mm_name = tier_cfg["mm"][0] if tier_cfg["mm"] else ""
-    emb_name = tier_cfg["emb"][0] if tier_cfg["emb"] else ""
-    ctx = tier_cfg["ctx"]
+def ensure_python_env():
+    print("\n[1/5] Setting up Python environment")
+    py = venv_python()
+    if not py.exists():
+        print("  Creating virtual environment (venv)")
+        result = subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)])
+        if result.returncode != 0:
+            print("  venv unavailable, falling back to system pip")
+            if not IS_WINDOWS:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--user",
+                     "--break-system-packages", "--upgrade", "pip"],
+                    check=False,
+                )
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--user",
+                     "--break-system-packages", "-r", str(REPO_DIR / "requirements-windows.txt")],
+                    check=False,
+                )
+            else:
+                subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=False)
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install",
+                     "-r", str(REPO_DIR / "requirements-windows.txt")],
+                    check=False,
+                )
+            return sys.executable
+    print("  Installing Python packages")
+    subprocess.run([str(py), "-m", "pip", "install", "--upgrade", "pip"], check=False)
+    subprocess.run(
+        [str(py), "-m", "pip", "install", "-r", str(REPO_DIR / "requirements-windows.txt")],
+        check=False,
+    )
+    return str(py)
 
-    def server_line(exe_path, model, extra, port, log):
-        args = [str(exe_path), "-m", str(MODELS_DIR / model)]
-        if mm_name and "mmproj" not in extra:
-            args += ["--mmproj", str(MODELS_DIR / mm_name)]
-        args += [c for c in extra.split() if c]
-        args += ["--host", "127.0.0.1", "--port", str(port)]
-        arg_str = ", ".join(f"'{a}'" for a in args)
-        return (
-            f'powershell -NoProfile -ExecutionPolicy Bypass -Command '
-            f'"Start-Process -FilePath \'{exe}\' -ArgumentList @({arg_str}) '
-            f'-WindowStyle Hidden -RedirectStandardOutput \'{APP_DIR / (log + ".log")}\' '
-            f'-RedirectStandardError \'{APP_DIR / (log + ".err.log")}\'"'
-        )
 
+def server_line(exe_path, model, extra, port, log):
+    args = [str(exe_path), "-m", str(MODELS_DIR / model)]
+    args += [c for c in extra.split() if c]
+    args += ["--host", "127.0.0.1", "--port", str(port)]
+    arg_str = ", ".join(f"'{a}'" for a in args)
+    return (
+        f'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+        f'"Start-Process -FilePath \'{exe_path}\' -ArgumentList @({arg_str}) '
+        f'-WindowStyle Hidden -RedirectStandardOutput \'{APP_DIR / (log + ".log")}\' '
+        f'-RedirectStandardError \'{APP_DIR / (log + ".err.log")}\'"'
+    )
+
+
+def write_start_cmd(tier_cfg, py):
     lines = [
         "@echo off",
         "tasklist /FI \"IMAGENAME eq llama-server.exe\" 2>nul | find /I \"llama-server.exe\" >nul",
         "if %errorlevel%==0 (echo Local AI is already running. & exit /b 0)",
         "echo Starting local AI (this takes a few seconds)...",
-        server_line(exe, llm_name, f"-c {ctx} -n 512 --jinja", 8080, "llm"),
+        server_line(LLAMA_DIR / "llama-server.exe", tier_cfg["llm"][0],
+                    f"-c {tier_cfg['ctx']} -n 512 --jinja", 8080, "llm"),
     ]
-    if emb_name:
-        lines.append(server_line(exe, emb_name, "--embeddings --pooling mean -c 512", 8081, "embed"))
+    if tier_cfg["emb"]:
+        lines.append(
+            server_line(LLAMA_DIR / "llama-server.exe", tier_cfg["emb"][0],
+                        "--embeddings --pooling mean -c 512", 8081, "embed")
+        )
     lines += [
         ":wait",
         "curl.exe -sf http://127.0.0.1:8080/health >nul 2>&1",
@@ -149,7 +243,7 @@ def write_start_cmd(tier_cfg):
     (APP_DIR / "start-local.cmd").write_text("\r\n".join(lines) + "\r\n")
 
 
-def write_run_cmd():
+def write_run_cmd(py):
     lines = [
         "@echo off",
         "cd /d \"%USERPROFILE%\\.arynox\\app\"",
@@ -165,25 +259,97 @@ def write_run_cmd():
         ")",
         'if /I "%1"=="start" shift',
         'call "%USERPROFILE%\\.arynox\\start-local.cmd"',
-        "python main.py %*",
+        f'"{py}" main.py %*',
     ]
     (APP_DIR / "run.cmd").write_text("\r\n".join(lines) + "\r\n")
 
 
+def write_start_sh(tier_cfg, py):
+    mm_name = tier_cfg["mm"][0] if tier_cfg["mm"] else ""
+    emb_name = tier_cfg["emb"][0] if tier_cfg["emb"] else ""
+    ctx = tier_cfg["ctx"]
+    server = LLAMA_DIR / SERVER_NAME
+    lines = [
+        "#!/usr/bin/env bash",
+        f'SERVER="{server}"',
+        f'MODELS="{MODELS_DIR}"',
+        f'LLM="{tier_cfg["llm"][0]}"',
+        f'MM="{mm_name}"',
+        f'EMB="{emb_name}"',
+        f'CTX={ctx}',
+        f'LOG="{APP_DIR}"',
+        'if pgrep -f "llama-server" > /dev/null 2>&1; then',
+        '  echo "Local AI is already running."',
+        "  exit 0",
+        "fi",
+        'echo "Starting local AI (this takes a few seconds)..."',
+        'if [ -n "$MM" ]; then',
+        '  nohup "$SERVER" -m "$MODELS/$LLM" --mmproj "$MODELS/$MM" -c $CTX -n 512 --jinja --host 127.0.0.1 --port 8080 > "$LOG/llm.log" 2>&1 &',
+        "else",
+        '  nohup "$SERVER" -m "$MODELS/$LLM" -c $CTX -n 512 --jinja --host 127.0.0.1 --port 8080 > "$LOG/llm.log" 2>&1 &',
+        "fi",
+        'if [ -n "$EMB" ]; then',
+        '  nohup "$SERVER" -m "$MODELS/$EMB" --embeddings --pooling mean -c 512 --host 127.0.0.1 --port 8081 > "$LOG/embed.log" 2>&1 &',
+        "fi",
+        "for i in $(seq 1 120); do",
+        "  if curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; then",
+        '    echo "Local AI is ready."',
+        "    exit 0",
+        "  fi",
+        "  sleep 1",
+        "done",
+        'echo "Local AI failed to start. Check $LOG/llm.log"',
+        "exit 1",
+    ]
+    (APP_DIR / "start-local.sh").write_text("\n".join(lines) + "\n", newline="\n")
+
+
+def write_run_sh(py):
+    lines = [
+        "#!/usr/bin/env bash",
+        'cd "$HOME/.arynox/app"',
+        'case "${1:-start}" in',
+        "  start)",
+        '    if [ -f "$HOME/.arynox/start-local.sh" ]; then bash "$HOME/.arynox/start-local.sh"; fi',
+        f'    exec "{py}" main.py "${{@:2}}"',
+        "    ;;",
+        "  stop)",
+        '    pkill -f "main.py" 2>/dev/null || true',
+        '    pkill -f "llama-server" 2>/dev/null || true',
+        '    echo "Arynox stopped."',
+        "    ;;",
+        "  status)",
+        '    if pgrep -f "main.py" > /dev/null 2>&1; then echo "Arynox: running"; else echo "Arynox: stopped"; fi',
+        '    if pgrep -f "llama-server" > /dev/null 2>&1; then echo "Local models: running"; else echo "Local models: stopped"; fi',
+        "    ;;",
+        "  --*)",
+        f'    exec "{py}" main.py "$@"',
+        "    ;;",
+        "  *)",
+        '    echo "Usage: bash run.sh [start|stop|status]"',
+        "    ;;",
+        "esac",
+    ]
+    (APP_DIR / "run.sh").write_text("\n".join(lines) + "\n", newline="\n")
+
+
 def main():
     print("=============================================")
-    print("   ARYNOX BRAIN - Windows Setup (prototype)")
+    print("   ARYNOX BRAIN - Windows/WSL Setup")
     print("=============================================")
-    ram_gb = detect_ram_gb()
-    free = free_gb()
-    print(f"  RAM     : {ram_gb} GB")
-    print(f"  Free    : {free} GB")
+    if is_wsl():
+        print("  Detected: WSL (Linux on Windows)")
+        print("  Note: webcam and microphone do not work inside WSL.")
+        print("  Arynox will run in typed mode. For voice + camera,")
+        print("  use native Windows Python instead.")
+    print(f"  RAM     : {detect_ram_gb()} GB")
+    print(f"  Free    : {free_gb()} GB")
     print()
 
     APP_DIR.mkdir(parents=True, exist_ok=True)
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-    default_tier = auto_tier(ram_gb)
+    default_tier = auto_tier(detect_ram_gb())
     print("  Local AI model tiers:")
     for t in ("lite", "standard", "pro", "max"):
         print("   ", TIERS[t]["help"])
@@ -194,28 +360,22 @@ def main():
         print("Invalid tier.")
         sys.exit(1)
 
-    print("\n[1/5] Installing Python packages")
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=False
-    )
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-r", str(REPO_DIR / "requirements-windows.txt")],
-        check=False,
-    )
+    py = ensure_python_env()
 
     if tier:
         tier_cfg = TIERS[tier]
         need_gb = tier_cfg["need_mb"] / 1000
+        free = free_gb()
         if free and free < need_gb:
             ans = input(f"  Only {free} GB free, need ~{need_gb} GB. Continue? [y/N]: ").strip().lower()
             if ans != "y":
                 sys.exit(1)
-        print("[2/5] Downloading llama.cpp for Windows")
+        print("[2/5] Downloading llama.cpp")
         if not download_llama_cpp():
             print("  Falling back to cloud (Gemini) mode.")
             tier = ""
         else:
-            print("[3/5] Downloading models (resume not supported, re-run to continue)")
+            print("[3/5] Downloading models (interrupted downloads resume)")
             ok = download(*tier_cfg["llm"], MODELS_DIR)
             if tier_cfg["mm"]:
                 ok = download(*tier_cfg["mm"], MODELS_DIR) and ok
@@ -225,9 +385,7 @@ def main():
                 print("  Some models failed. Re-run setup to continue.")
                 sys.exit(1)
 
-    whisper_name, whisper_url = WHISPER_MODELS[
-        "lite" if (tier == "lite" or ram_gb < 4) else "default"
-    ]
+    whisper_name, _ = WHISPER_MODELS["lite" if (tier == "lite" or detect_ram_gb() < 4) else "default"]
 
     print("[4/5] Installing Arynox files")
     app_dir = APP_DIR / "app"
@@ -254,22 +412,35 @@ def main():
     cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     print(f"  Config written (local backend: {tier or 'disabled'}, offline STT: {whisper_name})")
 
+    print("[5/5] Creating start/run scripts")
     if tier:
-        print("[5/5] Creating start/run scripts")
-        write_start_cmd(TIERS[tier])
-    write_run_cmd()
+        if IS_WINDOWS:
+            write_start_cmd(TIERS[tier], py)
+        else:
+            write_start_sh(TIERS[tier], py)
+    if IS_WINDOWS:
+        write_run_cmd(py)
+    else:
+        write_run_sh(py)
 
     print()
     print("Setup complete.")
-    print(f"  Start:   {APP_DIR}\\run.cmd          (or: run.cmd start)")
-    print(f"  Stop:    say 'stop' to Arynox,  or: run.cmd stop")
-    print(f"  Status:  run.cmd status")
-    print(f"  Demo:    cd {APP_DIR}\\app && python main.py --demo")
+    if IS_WINDOWS:
+        print(f"  Start:   {APP_DIR}\\run.cmd          (or: run.cmd start)")
+        print(f"  Stop:    say 'stop' to Arynox,  or: run.cmd stop")
+        print(f"  Status:  run.cmd status")
+        print(f"  Demo:    cd {APP_DIR}\\app && \"{py}\" main.py --demo")
+    else:
+        print(f"  Start:   bash {APP_DIR}/run.sh")
+        print(f"  Stop:    say 'stop' to Arynox,  or: bash {APP_DIR}/run.sh stop")
+        print(f"  Status:  bash {APP_DIR}/run.sh status")
+        print(f"  Demo:    cd {APP_DIR}/app && \"{py}\" main.py --demo")
     print()
     print("Offline: vision/chat/memory on-device; speech-to-text via")
-    print("faster-whisper (downloads a model on first use, then offline);")
-    print("text-to-speech via Windows voices.")
-    print("First camera/mic use will ask for Windows permissions.")
+    print("faster-whisper (downloads its model on first use, then offline).")
+    if is_wsl():
+        print("In WSL: typed mode is automatic (no mic/camera).")
+    print("First camera/mic use will ask for permission.")
 
 
 if __name__ == "__main__":

@@ -219,7 +219,13 @@ class ArynoxBrain:
             self.last_offer = time.time()
 
     def run(self):
-        if self.ai.vision_available():
+        typed = not speech.mic_ready(self.cfg)
+        if typed:
+            greeting = (
+                "No microphone found. Arynox is running in typed mode - "
+                "type your messages and press enter. Say stop to exit."
+            )
+        elif self.ai.vision_available():
             greeting = (
                 "Hello, I am Arynox. I can see and hear you. Try saying, what do "
                 "you see, or remember this person."
@@ -228,8 +234,21 @@ class ArynoxBrain:
             greeting = "Hello, I am Arynox, listening. Ask me anything."
         self.speak(greeting)
         self.last_speech = time.time()
+        silent = 0
         while True:
             now = time.time()
+            if typed:
+                try:
+                    line = input("You> ")
+                except (EOFError, KeyboardInterrupt):
+                    print("Goodbye.")
+                    break
+                if not line.strip():
+                    continue
+                self.last_speech = time.time()
+                if self.handle(line.strip()) == STOPPED:
+                    break
+                continue
             if self.ai.vision_available() and self.cfg.get("proactive", True):
                 if now - self.last_glance >= self.cfg.get("camera_interval_seconds", 8):
                     self.last_glance = now
@@ -248,5 +267,13 @@ class ArynoxBrain:
             text = speech.listen_once(self.cfg)
             if text:
                 self.last_speech = time.time()
+                silent = 0
                 if self.handle(text) == STOPPED:
                     break
+            else:
+                silent += 1
+                if silent >= 5:
+                    typed = True
+                    self.speak(
+                        "I have not been able to hear you. Switching to typed mode."
+                    )

@@ -26,13 +26,16 @@ cd AI_Mobile_Vision_Assistant
 python setup_windows.py
 ```
 
+(If `python` is not found, use `python3` or `py`.)
+
 The setup script:
 
 1. Reads your PC's RAM and suggests a model tier
-2. Installs Python packages (OpenCV, sounddevice, faster-whisper, pyttsx3, ...)
-3. Downloads the official llama.cpp Windows build
-4. Downloads the models for your tier
-5. Writes the config and creates `start-local.cmd` / `run.cmd`
+2. Creates a Python virtual environment (venv) and installs packages
+   (OpenCV, sounddevice, faster-whisper, pyttsx3, ...)
+3. Downloads the official llama.cpp build
+4. Downloads the models for your tier (with progress bar and resume)
+5. Writes the config and creates the start/run scripts
 
 ### Model tiers (pick by RAM)
 
@@ -95,6 +98,22 @@ Anything else is answered by the local AI model.
 | `--demo` camera fails | check webcam drivers; another app may hold the camera |
 | mic records silence | check Windows privacy settings (Settings > Privacy > Microphone) |
 | no speech-to-text | run `python -m pip install -r requirements-windows.txt` again |
-| model download interrupted | re-run `python setup_windows.py` (skips finished files) |
+| model download interrupted | re-run `python setup_windows.py` (downloads **resume** from where they stopped) |
 | voice "stop" does nothing | whisper misheard it - also works via `run.cmd stop` |
 | RAM too low for tier | pick a lower tier or add a Gemini API key to `%USERPROFILE%\.arynox\config.json` |
+
+## Running inside WSL (Ubuntu on Windows)
+
+If you cloned and ran setup from WSL (paths like `/mnt/d/...`):
+
+- Setup works: RAM is detected from `/proc/meminfo`, packages install into a
+  venv (avoids the PEP 668 "externally-managed-environment" error), and a
+  **Linux** llama.cpp build is downloaded instead of the Windows one
+- Webcam and microphone **do not work inside WSL** - Arynox automatically
+  switches to **typed mode**: you type your messages, replies are printed
+  (and spoken when possible)
+- Start with `bash ~/.arynox/run.sh`, stop with `bash ~/.arynox/run.sh stop`
+  or by typing "stop"
+- For the full voice + camera experience, install Python from
+  [python.org](https://www.python.org/downloads/) and run the setup from
+  PowerShell instead (`python setup_windows.py`)

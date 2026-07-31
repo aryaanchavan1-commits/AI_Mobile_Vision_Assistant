@@ -49,3 +49,4 @@ WHISPER_MODELS = {
 }
 
 LLAMA_ASSET_PATTERN = "bin-win-cpu-x64.zip"
+LINUX_ASSET_PATTERN = "bin-ubuntu-x64.tar.gz"
