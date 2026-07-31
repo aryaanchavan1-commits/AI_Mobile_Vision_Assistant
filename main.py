@@ -31,12 +31,18 @@ def demo(cfg):
         )
     print("[demo] microphone, please speak for 4 seconds")
     speech.speak("Microphone test. Please speak now.", cfg)
+    stt_engine = "whisper (offline)" if speech.whisper_available(cfg) else "google (internet)"
+    print("stt engine:", stt_engine)
     wav = str(config.AUDIO_DIR / "demo.wav")
     path = speech.record(4, wav)
-    text = speech.transcribe(path, cfg.get("language", "en-US"))
+    text = speech.transcribe(path, cfg)
     print("stt:", repr(text))
     if text == "__NETWORK__":
-        speech.speak("Microphone works, but speech recognition needs internet.", cfg)
+        speech.speak(
+            "Microphone works, but speech recognition needs internet. "
+            "Run setup again to install the offline whisper model.",
+            cfg,
+        )
     elif text:
         speech.speak(f"You said: {text}", cfg)
     else:

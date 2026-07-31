@@ -1,6 +1,8 @@
 import os
+import shutil
 import subprocess
 import time
+from pathlib import Path
 
 try:
     import speech_recognition as sr
@@ -8,6 +10,8 @@ except ImportError:
     sr = None
 
 from .config import AUDIO_DIR
+
+TTS_UNUSABLE = False
 
 
 def record(duration, path):
@@ -28,8 +32,58 @@ def record(duration, path):
     return path
 
 
-def transcribe(path, language="en-US"):
-    if path is None or sr is None:
+def _models_dir(cfg):
+    return Path(
+        os.path.expanduser((cfg.get("local", {}) or {}).get("models_dir", "~/.arynox/models"))
+    )
+
+
+def whisper_available(cfg):
+    if shutil.which("whisper-cli") is None:
+        return False
+    model = str(cfg.get("whisper_model") or "")
+    if not model:
+        return False
+    return (_models_dir(cfg) / model).exists()
+
+
+def whisper_transcribe(path, cfg):
+    model = str(cfg.get("whisper_model") or "ggml-base.bin")
+    model_path = _models_dir(cfg) / model
+    if not model_path.exists():
+        return None
+    lang = str(cfg.get("language", "en-US"))[:2]
+    out = str(AUDIO_DIR / "whisper_out")
+    for suffix in (".txt", ".srt", ".json"):
+        try:
+            os.remove(out + suffix)
+        except OSError:
+            pass
+    cmd = [
+        "whisper-cli",
+        "-m", str(model_path),
+        "-f", os.path.abspath(path),
+        "-l", lang,
+        "-otxt",
+        "-of", out,
+        "--no-prints",
+        "-t", "4",
+    ]
+    try:
+        result = subprocess.run(cmd, timeout=180)
+        if result.returncode != 0:
+            return None
+        txt = out + ".txt"
+        if os.path.exists(txt):
+            text = Path(txt).read_text(encoding="utf-8", errors="ignore").strip()
+            return text or None
+    except Exception:
+        return None
+    return None
+
+
+def google_transcribe(path, language):
+    if sr is None:
         return None
     recognizer = sr.Recognizer()
     try:
@@ -44,10 +98,26 @@ def transcribe(path, language="en-US"):
         return None
 
 
+def transcribe(path, cfg):
+    if path is None:
+        return None
+    language = str(cfg.get("language", "en-US"))
+    engine = str(cfg.get("stt", "auto")).lower()
+    if engine == "google":
+        return google_transcribe(path, language)
+    if engine == "local" or (engine == "auto" and whisper_available(cfg)):
+        text = whisper_transcribe(path, cfg)
+        if text is not None or engine == "local":
+            return text
+    text = google_transcribe(path, language)
+    if text == "__NETWORK__":
+        return whisper_transcribe(path, cfg)
+    return text
+
+
 def listen_once(cfg):
     block = int(cfg.get("listen_block_seconds", 4))
     limit = int(cfg.get("listen_max_seconds", 30))
-    lang = cfg.get("language", "en-US")
     transcript = ""
     empty = 0
     total = 0
@@ -60,7 +130,7 @@ def listen_once(cfg):
             if transcript and empty >= 2:
                 break
             continue
-        text = transcribe(path, lang)
+        text = transcribe(path, cfg)
         if text == "__NETWORK__":
             time.sleep(2)
             empty += 1
@@ -81,11 +151,32 @@ def speak(text, cfg):
         return
     rate = str(cfg.get("tts_rate", 1.05))
     lang = str(cfg.get("language", "en-US"))[:2]
+    global TTS_UNUSABLE
     for chunk in _chunks(text):
-        subprocess.run(
-            ["termux-tts-speak", "-r", rate, "-l", lang, chunk],
-            timeout=120,
+        ok = False
+        if not TTS_UNUSABLE:
+            ok = _speak_tts(chunk, rate, lang)
+            if not ok:
+                TTS_UNUSABLE = True
+        if not ok:
+            _speak_espeak(chunk, lang)
+
+
+def _speak_tts(text, rate, lang):
+    try:
+        result = subprocess.run(
+            ["termux-tts-speak", "-r", rate, "-l", lang, text], timeout=120
         )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _speak_espeak(text, lang):
+    try:
+        subprocess.run(["espeak-ng", "-v", lang, "-s", "170", text], timeout=120)
+    except Exception:
+        pass
 
 
 def _chunks(text, size=400):

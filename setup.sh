@@ -20,7 +20,20 @@ pkg update -y
 pkg upgrade -y
 
 echo "[2/7] Installing system packages"
-pkg install -y python python-pillow termux-api flac ffmpeg
+pkg install -y python python-pillow termux-api flac ffmpeg espeak-ng || {
+  echo "  Some optional packages were missing, installing core packages only"
+  pkg install -y python python-pillow termux-api flac ffmpeg
+}
+
+download() {
+  local name="$1" url="$2"
+  if [ -s "$MODELS_DIR/$name" ]; then
+    echo "  $name already downloaded"
+    return 0
+  fi
+  echo "  Downloading $name"
+  curl -L --fail --retry 3 -C - -o "$MODELS_DIR/$name" "$url" || return 1
+}
 
 echo "[3/7] Detecting your phone"
 RAM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
@@ -99,9 +112,9 @@ esac
 
 if [ -n "$TIER" ]; then
   case "$TIER" in
-    lite) NEED_MB=2500 ;;
-    standard) NEED_MB=7500 ;;
-    *) NEED_MB=8500 ;;
+    lite) NEED_MB=3000 ;;
+    standard) NEED_MB=8000 ;;
+    *) NEED_MB=9000 ;;
   esac
   if [ "${STORAGE_MB:-0}" -gt 0 ] && [ "$STORAGE_MB" -lt "$NEED_MB" ]; then
     echo "  Warning: only ${STORAGE_MB} MB free, this tier needs ~${NEED_MB} MB."
@@ -145,15 +158,6 @@ fi
 
 if [ -n "$TIER" ]; then
   mkdir -p "$MODELS_DIR"
-  download() {
-    local name="$1" url="$2"
-    if [ -s "$MODELS_DIR/$name" ]; then
-      echo "  $name already downloaded"
-      return 0
-    fi
-    echo "  Downloading $name"
-    curl -L --fail --retry 3 -C - -o "$MODELS_DIR/$name" "$url" || return 1
-  }
   download "$LLM_NAME" "$LLM_URL" || echo "  FAILED: $LLM_NAME"
   if [ -n "$MM" ]; then download "$MM" "$MM_URL" || echo "  FAILED: $MM"; fi
   if [ -n "$EMB" ]; then
@@ -164,6 +168,34 @@ if [ -n "$TIER" ]; then
     [ -e "$f" ] || continue
     ls -lh "$f" | awk '{print "    "$9" = "$5}'
   done
+fi
+
+echo "  Building offline speech-to-text (whisper.cpp)"
+WHISPER_MODEL="ggml-base.bin"
+if [ "$RAM_MB" -gt 0 ] && [ "$RAM_MB" -lt 4000 ]; then WHISPER_MODEL="ggml-tiny.bin"; fi
+if ! command -v whisper-cli >/dev/null 2>&1; then
+  WHISPER_SRC="$HOME/whisper.cpp"
+  if [ ! -d "$WHISPER_SRC/.git" ]; then
+    echo "  Cloning whisper.cpp (a few minutes, done once)"
+    git clone --depth 1 https://github.com/ggml-org/whisper.cpp "$WHISPER_SRC" || {
+      echo "  Clone failed; speech-to-text will use the internet engine."
+      WHISPER_MODEL=""
+    }
+  fi
+  if [ -n "$WHISPER_MODEL" ] && command -v cmake >/dev/null 2>&1; then
+    echo "  Compiling whisper-cli with $CORES cores (5-15 minutes, done once)"
+    ( cmake -S "$WHISPER_SRC" -B "$WHISPER_SRC/build" -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON
+      cmake --build "$WHISPER_SRC/build" -j "$CORES" --target whisper-cli ) > "$APP_DIR/whisper-build.log" 2>&1 || {
+      echo "  Build failed. See $APP_DIR/whisper-build.log"
+      WHISPER_MODEL=""
+    }
+    if [ -n "$WHISPER_MODEL" ] && [ -x "$WHISPER_SRC/build/bin/whisper-cli" ]; then
+      cp "$WHISPER_SRC/build/bin/whisper-cli" "$PREFIX/bin/whisper-cli"
+    fi
+  fi
+fi
+if [ -n "$WHISPER_MODEL" ] && command -v whisper-cli >/dev/null 2>&1; then
+  download "$WHISPER_MODEL" "https://huggingface.co/ggml-org/whisper.cpp/resolve/main/$WHISPER_MODEL" || echo "  FAILED: $WHISPER_MODEL"
 fi
 
 echo "[5/7] Installing Python packages"
@@ -178,7 +210,7 @@ if [ ! -f "$APP_DIR/config.json" ]; then
     cp "$SRC_DIR/config.json" "$APP_DIR/config.json"
 fi
 
-TIER="$TIER" LLM_NAME="$LLM_NAME" MM="$MM" EMB="$EMB" CTX="$CTX" python3 - <<'PY'
+TIER="$TIER" LLM_NAME="$LLM_NAME" MM="$MM" EMB="$EMB" CTX="$CTX" WHISPER_MODEL="$WHISPER_MODEL" python3 - <<'PY'
 import json, os
 p = os.path.expanduser("~/.arynox/config.json")
 c = json.load(open(p))
@@ -193,8 +225,12 @@ c["local"] = {
     "embed_model": os.environ.get("EMB", ""),
     "context": int(os.environ.get("CTX", "2048")),
 }
+c["stt"] = "auto"
+c["whisper_model"] = os.environ.get("WHISPER_MODEL", "")
+c["tts_engine"] = "auto"
 json.dump(c, open(p, "w"), indent=2)
 print("  Local backend:", tier or "disabled (cloud mode)")
+print("  Offline STT:", os.environ.get("WHISPER_MODEL") or "unavailable (uses internet)")
 PY
 
 if [ -n "$TIER" ]; then
@@ -269,3 +305,10 @@ echo "Start Arynox:     bash ~/.arynox/run.sh"
 echo "Self-test again:  bash ~/.arynox/run.sh --demo"
 echo "Stop models:      killall llama-server"
 echo "Config file:      ~/.arynox/config.json"
+echo
+echo "Offline capability:"
+echo "  - Vision + chat: llama-server (on-device)"
+echo "  - Speech to text: whisper-cli (on-device)"
+echo "  - Text to speech: Android engine, espeak-ng fallback"
+echo "  - Memory: SQLite + local embeddings"
+echo "Internet is only needed for the first download."

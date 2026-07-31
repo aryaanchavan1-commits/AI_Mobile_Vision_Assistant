@@ -12,6 +12,9 @@ MODELS_DIR = DATA_DIR / "models"
 DEFAULTS = {
     "gemini_api_key": "",
     "backend": "auto",
+    "stt": "auto",
+    "whisper_model": "ggml-base.bin",
+    "tts_engine": "auto",
     "chat_model": "gemini-2.5-flash",
     "vision_model": "gemini-2.5-flash",
     "embedding_model": "gemini-embedding-001",
