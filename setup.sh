@@ -25,7 +25,7 @@ pkg install -y python python-pillow termux-api flac ffmpeg
 echo "[3/7] Detecting your phone"
 RAM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
 STORAGE_MB=$(df -m "$HOME" 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
-CORES=$(nproc 2>/dev/null || echo "?")
+CORES=$(nproc 2>/dev/null || echo 4)
 if command -v getprop >/dev/null 2>&1; then
   BRAND=$(getprop ro.product.brand 2>/dev/null || echo unknown)
   DEVICE_MODEL=$(getprop ro.product.model 2>/dev/null || echo unknown)
@@ -99,21 +99,48 @@ esac
 
 if [ -n "$TIER" ]; then
   case "$TIER" in
-    lite) NEED_MB=1500 ;;
-    standard) NEED_MB=6000 ;;
-    *) NEED_MB=7000 ;;
+    lite) NEED_MB=2500 ;;
+    standard) NEED_MB=7500 ;;
+    *) NEED_MB=8500 ;;
   esac
   if [ "${STORAGE_MB:-0}" -gt 0 ] && [ "$STORAGE_MB" -lt "$NEED_MB" ]; then
     echo "  Warning: only ${STORAGE_MB} MB free, this tier needs ~${NEED_MB} MB."
     read -rp "  Continue anyway? [y/N]: " ANS
     [ "$ANS" = "y" ] || exit 1
   fi
-  echo "  Installing the local model runtime (llama.cpp)"
-  pkg install -y llama-cpp || {
-    echo "  llama-cpp is not available in the Termux repo on this device."
+  echo "  Building the local model runtime (llama.cpp)"
+  pkg install -y clang cmake make ninja git || {
+    echo "  Build tools could not be installed."
     echo "  Falling back to cloud (Gemini) mode."
     TIER=""
   }
+  LLAMA_SRC="$HOME/llama.cpp"
+  if [ -n "$TIER" ] && ! command -v llama-server >/dev/null 2>&1; then
+    if [ ! -d "$LLAMA_SRC/.git" ]; then
+      echo "  Cloning llama.cpp (a few minutes, done once)"
+      git clone --depth 1 https://github.com/ggml-org/llama.cpp "$LLAMA_SRC" || {
+        echo "  Clone failed. Falling back to cloud (Gemini) mode."
+        TIER=""
+      }
+    fi
+  fi
+  if [ -n "$TIER" ] && ! command -v llama-server >/dev/null 2>&1; then
+    echo "  Compiling llama-server with $CORES cores (10-25 minutes on a phone, done only once)"
+    mkdir -p "$APP_DIR"
+    ( cmake -S "$LLAMA_SRC" -B "$LLAMA_SRC/build" -DCMAKE_BUILD_TYPE=Release
+      cmake --build "$LLAMA_SRC/build" -j "$CORES" --target llama-server ) > "$APP_DIR/build.log" 2>&1 || {
+      echo "  Build failed. See $APP_DIR/build.log"
+      echo "  Falling back to cloud (Gemini) mode."
+      TIER=""
+    }
+  fi
+  if [ -n "$TIER" ] && ! command -v llama-server >/dev/null 2>&1 && [ -x "$LLAMA_SRC/build/bin/llama-server" ]; then
+    cp "$LLAMA_SRC/build/bin/llama-server" "$PREFIX/bin/llama-server"
+  fi
+  if [ -n "$TIER" ] && ! command -v llama-server >/dev/null 2>&1; then
+    echo "  llama-server binary is missing. Falling back to cloud (Gemini) mode."
+    TIER=""
+  fi
 fi
 
 if [ -n "$TIER" ]; then
