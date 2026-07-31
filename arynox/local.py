@@ -88,6 +88,16 @@ class Local:
             return None
 
 
+def stop_server(cfg):
+    local_cfg = cfg.get("local", {}) or {}
+    if not local_cfg.get("enabled"):
+        return
+    try:
+        subprocess.run(["pkill", "-f", "llama-server"], capture_output=True)
+    except Exception:
+        pass
+
+
 def ensure_server(cfg):
     local_cfg = cfg.get("local", {}) or {}
     if cfg.get("backend", "auto") == "gemini" or not local_cfg.get("enabled"):

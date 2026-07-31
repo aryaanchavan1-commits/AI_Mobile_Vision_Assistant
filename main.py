@@ -1,7 +1,7 @@
 import argparse
 
 from arynox import brain, config, llm, speech, vision
-from arynox.local import ensure_server
+from arynox.local import ensure_server, stop_server
 
 
 def demo(cfg):
@@ -69,7 +69,12 @@ def main():
         if text:
             b.handle(text)
         return
-    b.run()
+    try:
+        b.run()
+    except KeyboardInterrupt:
+        print("Arynox stopped by keyboard.")
+    finally:
+        stop_server(cfg)
 
 
 if __name__ == "__main__":

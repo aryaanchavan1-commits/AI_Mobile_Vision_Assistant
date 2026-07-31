@@ -290,7 +290,27 @@ fi
 cat > "$APP_DIR/run.sh" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 cd "$HOME/.arynox/app"
-exec python3 main.py "$@"
+case "${1:-start}" in
+  start)
+    if [ -f "$HOME/.arynox/start-local.sh" ]; then bash "$HOME/.arynox/start-local.sh"; fi
+    exec python3 main.py "${@:2}"
+    ;;
+  stop)
+    pkill -f "python3 main.py" 2>/dev/null || true
+    pkill -f "llama-server" 2>/dev/null || true
+    echo "Arynox stopped."
+    ;;
+  status)
+    if pgrep -f "python3 main.py" > /dev/null 2>&1; then echo "Arynox: running"; else echo "Arynox: stopped"; fi
+    if pgrep -f "llama-server" > /dev/null 2>&1; then echo "Local models: running"; else echo "Local models: stopped"; fi
+    ;;
+  --*)
+    exec python3 main.py "$@"
+    ;;
+  *)
+    echo "Usage: bash run.sh [start|stop|status]"
+    ;;
+esac
 EOF
 chmod +x "$APP_DIR/run.sh"
 
@@ -301,9 +321,10 @@ python3 "$APP_DIR/app/main.py" --demo || true
 
 echo
 echo "Setup complete."
-echo "Start Arynox:     bash ~/.arynox/run.sh"
-echo "Self-test again:  bash ~/.arynox/run.sh --demo"
-echo "Stop models:      killall llama-server"
+echo "Start Arynox:     bash ~/.arynox/run.sh        (or: bash run.sh start)"
+echo "Stop Arynox:      say 'stop' to Arynox,        or: bash run.sh stop"
+echo "Check status:     bash ~/.arynox/run.sh status"
+echo "Self-test again:  bash ~/.arynox/run.sh start --demo"
 echo "Config file:      ~/.arynox/config.json"
 echo
 echo "Offline capability:"

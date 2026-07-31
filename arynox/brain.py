@@ -19,6 +19,8 @@ PERSON_PROMPT = (
 
 _PERSON_WORDS = re.compile(r"person|him|her|he\b|she\b|man|woman|friend|name|them")
 
+STOPPED = "stop"
+
 
 class ArynoxBrain:
     def __init__(self, cfg):
@@ -88,6 +90,10 @@ class ArynoxBrain:
         if wake and text.lower().startswith(wake):
             text = text[len(wake):].lstrip(", .!?").strip()
         low = text.lower()
+
+        if re.search(r"go to sleep|\b(?:stop|exit|quit|shutdown|goodbye)\b", low):
+            self.speak("Stopping. Type bash run.sh start to wake me up.")
+            return STOPPED
 
         m = re.search(r"(?:remember|memorize|note down)\s*(?:this|that)?\s*(.*)", low)
         if m:
@@ -242,4 +248,5 @@ class ArynoxBrain:
             text = speech.listen_once(self.cfg)
             if text:
                 self.last_speech = time.time()
-                self.handle(text)
+                if self.handle(text) == STOPPED:
+                    break
