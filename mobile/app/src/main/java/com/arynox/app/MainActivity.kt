@@ -1,6 +1,8 @@
 package com.arynox.app
 
 import android.os.Bundle
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -78,7 +80,10 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
             busy = true
             val bytes = try {
                 val stream = ByteArrayOutputStream()
-                context.contentResolver.openInputStream(uri)?.use { it.copyTo(stream) }
+                val bmp = BitmapFactory.decodeStream(context.contentResolver.openInputStream(uri))
+                val scaled = scaleDown(bmp, 1280)
+                bmp?.recycle()
+                scaled.compress(Bitmap.CompressFormat.JPEG, 80, stream)
                 stream.toByteArray()
             } catch (_: Exception) {
                 null
@@ -155,4 +160,14 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
             }
         }
     }
+}
+
+private fun scaleDown(bmp: Bitmap?, maxDim: Int): Bitmap {
+    if (bmp == null) return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+    val w = bmp.width
+    val h = bmp.height
+    val m = maxOf(w, h)
+    if (m <= maxDim) return bmp
+    val scale = maxDim.toFloat() / m
+    return Bitmap.createScaledBitmap(bmp, (w * scale).toInt(), (h * scale).toInt(), true)
 }

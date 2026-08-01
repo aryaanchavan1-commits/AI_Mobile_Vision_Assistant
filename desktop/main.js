@@ -67,7 +67,7 @@ const EMBED_API = "http://127.0.0.1:8081";
 let win = null;
 let serverProc = null;
 let pythonProc = null;
-let pythonMode = false;
+let lastTier = "standard";
 let logBuffer = [];
 
 function log(level, message) {
@@ -191,8 +191,17 @@ function untar(tarPath, destDir) {
   });
 }
 
-async function installLlama(provider) {
-  const pattern = PROVIDERS[provider][process.platform === "win32" ? "win" : "linux"];
+async function installLlama(providerArg) {
+  const osKey = process.platform === "win32" ? "win" : "linux";
+  let provider = providerArg;
+  let pattern = PROVIDERS[provider] && PROVIDERS[provider][osKey];
+  while (!pattern) {
+    const fallback =
+      provider === "cuda" ? "vulkan" : provider === "vulkan" ? "cpu" : null;
+    if (!fallback) throw new Error(`no llama.cpp build for ${providerArg} on ${process.platform}`);
+    provider = fallback;
+    pattern = PROVIDERS[provider][osKey];
+  }
   const exe = path.join(LLAMA_DIR, SERVER_NAME);
   if (fs.existsSync(exe)) return;
   log("info", `Provider: ${PROVIDERS[provider].label}`);
@@ -291,14 +300,15 @@ function healthCheck(url, timeoutMs = 120000) {
   });
 }
 
-function startLlamaServer() {
+function startLlamaServer(tier) {
+  const ctx = tier === "lite" ? 2048 : tier === "standard" ? 4096 : 8192;
   const exe = path.join(LLAMA_DIR, SERVER_NAME);
   const llm = fs.readdirSync(MODELS_DIR).find((f) => f.endsWith(".gguf") && f.startsWith("Qwen"));
   const mm = fs.existsSync(path.join(MODELS_DIR, "mmproj-F16.gguf"));
   const emb = fs.existsSync(path.join(MODELS_DIR, "bge-small-en-v1.5-q4_k_m.gguf"));
   const args = ["-m", path.join(MODELS_DIR, llm)];
   if (mm) args.push("--mmproj", path.join(MODELS_DIR, "mmproj-F16.gguf"));
-  args.push("-c", "2048", "-n", "512", "--jinja", "--host", "127.0.0.1", "--port", "8080");
+  args.push("-c", String(ctx), "-n", "512", "--jinja", "--host", "127.0.0.1", "--port", "8080");
   serverProc = spawn(exe, args, { stdio: ["ignore", "pipe", "pipe"] });
   serverProc.stdout.on("data", (d) => log("server", d.toString().trim()));
   serverProc.stderr.on("data", (d) => log("server", d.toString().trim()));
@@ -310,18 +320,32 @@ function startLlamaServer() {
   }
 }
 
+function ensureLocalConfig() {
+  const cfgPath = path.join(DATA_DIR, "config.json");
+  try {
+    if (fs.existsSync(cfgPath)) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      if (cfg.local && cfg.local.enabled) return;
+      cfg.local = cfg.local || {};
+      cfg.local.enabled = true;
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+    }
+  } catch (_) {}
+}
+
 function startPythonBrain() {
   const py = findPython();
   if (!py) {
     log("info", "Python not found - running chat-only mode (no memory/voice).");
-    pythonMode = false;
     return;
   }
   log("info", `Python found (${py}) - launching full Arynox brain...`);
   copyAppFiles();
+  ensureLocalConfig();
   pythonProc = spawn(py, [path.join(APP_DIR, "main.py")], {
     cwd: APP_DIR,
-    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, ARYNOX_DIR: DATA_DIR },
+    stdio: ["ignore", "pipe", "pipe"],
   });
   pythonProc.stdout.on("data", (d) => send("brain", d.toString()));
   pythonProc.stderr.on("data", (d) => send("brain", d.toString()));
@@ -329,7 +353,6 @@ function startPythonBrain() {
     log("info", `Arynox brain exited (code ${code}).`);
     pythonProc = null;
   });
-  pythonMode = true;
 }
 
 async function chatOpenAI(messages) {
@@ -370,6 +393,7 @@ function stopAll() {
 ipcMain.handle("system-info", () => systemInfo());
 ipcMain.handle("install", async (_e, tier) => {
   try {
+    lastTier = tier;
     log("info", `Detected: ${process.platform}, RAM ${(os.totalmem() / 1e9).toFixed(1)} GB, tier=${tier}`);
     await installLlama(detectProvider());
     await installModels(tier);
@@ -382,11 +406,10 @@ ipcMain.handle("install", async (_e, tier) => {
 });
 ipcMain.handle("start", async () => {
   try {
-    if (!serverProc) startLlamaServer();
+    if (!serverProc) startLlamaServer(lastTier);
     await healthCheck(LLAMA_API);
     log("info", "Local AI ready.");
-    if (findPython()) startPythonBrain();
-    else log("info", "Chat-only mode (no Python).");
+    startPythonBrain();
     return { ok: true };
   } catch (err) {
     log("error", String(err));
@@ -396,10 +419,6 @@ ipcMain.handle("start", async () => {
 ipcMain.handle("stop", () => { stopAll(); return { ok: true }; });
 ipcMain.handle("chat", async (_e, text) => {
   try {
-    if (pythonMode && pythonProc) {
-      pythonProc.stdin.write(text + "\n");
-      return { ok: true, mode: "python" };
-    }
     const reply = await chatOpenAI([
       { role: "system", content: "You are Arynox, a friendly concise AI companion. Answer in 2-4 short sentences." },
       { role: "user", content: text },
@@ -416,6 +435,9 @@ function createWindow() {
     width: 900,
     height: 680,
     title: "Arynox",
+    icon: fs.existsSync(path.join(__dirname, "build", "icon.ico"))
+      ? path.join(__dirname, "build", "icon.ico")
+      : undefined,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -427,6 +449,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  app.setAppUserModelId("com.arynox.desktop");
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

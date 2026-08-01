@@ -60,7 +60,7 @@ Full guide: [README-WINDOWS.md](README-WINDOWS.md)
 ```
 cd desktop
 npm install
-npx electron-builder --win nsis      # -> dist/Arynox Setup 1.0.0.exe
+npx electron-builder --win nsis      # -> dist/Arynox-Setup-1.0.0.exe
 ```
 
 The app detects your PC (RAM, NVIDIA GPU, OS), downloads the matching
@@ -129,6 +129,42 @@ tests/test_brain.py      offline smoke tests (any Python 3)
 python tests/test_brain.py        # offline brain + memory tests
 python main.py --demo             # hardware self-test (camera, mic, TTS)
 ```
+
+## Publishing
+
+### Windows installer (EXE)
+
+```powershell
+cd desktop
+npm install
+npx electron-builder --win nsis          # signed/signing-skipped installer
+```
+
+The installer is a guided NSIS setup (choose folder, desktop shortcut). To
+remove the SmartScreen "unknown publisher" warning, code-sign it with any
+Windows code-signing certificate: `electron-builder --config.win.signingHashAlgorithms=sha256` with `CSC_LINK`/`CSC_KEY_PASSWORD` set, or publish unsigned.
+
+### Android APK
+
+```powershell
+cd mobile
+.\gradlew.bat assembleRelease
+```
+
+- `app/build/outputs/apk/release/app-release.apk` is signed with your release
+  keystore. The keystore lives at `mobile/keystore/arynox-release.jks` with
+  credentials in `mobile/key.properties` (both gitignored — **back them up**;
+  you need them for every future update of the app on the same package name).
+- Rebuild the icons any time with: `powershell -File tools/build_icons.ps1`
+- Distributing on the Play Store additionally requires a Google Play App
+  Signing setup (upload key) and signing an AAB:
+  `.\gradlew.bat bundleRelease`
+
+### GitHub Releases
+
+Tag a version and push; attach `desktop/dist/Arynox-Setup-*.exe` and
+`mobile/app/build/outputs/apk/release/app-release.apk` to the release — those
+are the two files your users install.
 
 ## Config
 
