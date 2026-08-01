@@ -12,7 +12,7 @@ from pathlib import Path
 import requests
 
 from arynox.config import IS_WINDOWS
-from arynox.models import LINUX_ASSET_PATTERN, LLAMA_ASSET_PATTERN, TIERS, WHISPER_MODELS
+from arynox.models import LINUX_ASSET_PATTERN, LLAMA_ASSET_PATTERN, PROVIDERS, TIERS, WHISPER_MODELS
 
 APP_DIR = Path.home() / ".arynox"
 MODELS_DIR = APP_DIR / "models"
@@ -147,11 +147,40 @@ def download(name, url, dest_dir):
         return False
 
 
-def download_llama_cpp():
+def nvidia_present():
+    try:
+        for exe in ("nvidia-smi", r"C:\Windows\System32\nvidia-smi.exe"):
+            r = subprocess.run([exe, "-L"], capture_output=True, timeout=10)
+            if r.returncode == 0:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def detect_provider():
+    """Auto-pick the llama.cpp engine build for this machine."""
+    forced = os.environ.get("ARYNOX_PROVIDER", "auto").strip().lower()
+    if forced in PROVIDERS:
+        return forced
+    if forced not in ("", "auto"):
+        print(f"  Unknown ARYNOX_PROVIDER '{forced}', using auto.")
+    if IS_WINDOWS and nvidia_present():
+        return "cuda"
+    return "cpu"
+
+
+def download_llama_cpp(provider):
+    pattern = PROVIDERS[provider]["win" if IS_WINDOWS else "linux"]
+    if pattern is None:
+        print(f"  No prebuilt {provider} build for this OS. Falling back to CPU.")
+        provider = "cpu"
+        pattern = PROVIDERS["cpu"]["win" if IS_WINDOWS else "linux"]
+    print(f"  Provider: {PROVIDERS[provider]['label']}")
     exe = LLAMA_DIR / SERVER_NAME
     if exe.exists():
         print("  llama.cpp already downloaded")
-        return True
+        return provider
     print("  Fetching latest llama.cpp release")
     resp = requests.get(
         "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest",
@@ -159,7 +188,6 @@ def download_llama_cpp():
         timeout=30,
     )
     resp.raise_for_status()
-    pattern = LLAMA_ASSET_PATTERN if IS_WINDOWS else LINUX_ASSET_PATTERN
     asset = None
     for item in resp.json().get("assets", []):
         if item["name"].endswith(pattern):
@@ -167,10 +195,10 @@ def download_llama_cpp():
             break
     if asset is None:
         print(f"  FAILED: no release asset matching {pattern}")
-        return False
+        return None
     archive = APP_DIR / asset["name"]
     if not download(asset["name"], asset["browser_download_url"], APP_DIR):
-        return False
+        return None
     print(f"  Extracting {asset['name']}")
     LLAMA_DIR.mkdir(parents=True, exist_ok=True)
     if str(archive).endswith(".zip"):
@@ -186,7 +214,7 @@ def download_llama_cpp():
                 target = LLAMA_DIR / name
                 if os.path.abspath(os.path.join(root, name)) != os.path.abspath(target):
                     shutil.move(os.path.join(root, name), target)
-    return exe.exists()
+    return provider if exe.exists() else None
 
 
 def ensure_python_env():
@@ -403,10 +431,12 @@ def main():
 
     py = ensure_python_env()
 
+    provider = ""
     if tier:
         tier_cfg = TIERS[tier]
         print("[2/5] Downloading llama.cpp")
-        if not download_llama_cpp():
+        provider = download_llama_cpp(detect_provider())
+        if not provider:
             print("  Falling back to cloud (Gemini) mode.")
             tier = ""
         else:
@@ -440,6 +470,7 @@ def main():
         "vlm_mmproj": TIERS[tier]["mm"][0] if tier and TIERS[tier]["mm"] else "",
         "embed_model": TIERS[tier]["emb"][0] if tier and TIERS[tier]["emb"] else "",
         "context": TIERS[tier]["ctx"] if tier else 2048,
+        "provider": PROVIDERS[provider]["label"] if provider else "",
     }
     cfg["stt"] = "auto"
     cfg["whisper_model"] = whisper_name

@@ -50,3 +50,28 @@ WHISPER_MODELS = {
 
 LLAMA_ASSET_PATTERN = "bin-win-cpu-x64.zip"
 LINUX_ASSET_PATTERN = "bin-ubuntu-x64.tar.gz"
+
+# Per-OS llama.cpp engine builds. "cudart-" bundles the CUDA runtime so no
+# toolkit install is needed; vulkan works on any GPU with Vulkan drivers.
+PROVIDERS = {
+    "cpu": {
+        "win": "bin-win-cpu-x64.zip",
+        "linux": "bin-ubuntu-x64.tar.gz",
+        "label": "llama.cpp CPU (works everywhere)",
+    },
+    "vulkan": {
+        "win": "bin-win-vulkan-x64.zip",
+        "linux": "bin-ubuntu-vulkan-x64.tar.gz",
+        "label": "llama.cpp Vulkan (GPU)",
+    },
+    "cuda": {
+        "win": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+        "linux": None,
+        "label": "llama.cpp CUDA (NVIDIA GPU)",
+    },
+    "hip": {
+        "win": "bin-win-hip-radeon-x64.zip",
+        "linux": "bin-ubuntu-rocm-7.2-x64.tar.gz",
+        "label": "llama.cpp HIP/ROCm (AMD GPU)",
+    },
+}

@@ -139,6 +139,7 @@ if [ -n "$TIER" ]; then
   }
   LLAMA_SRC="$HOME/llama.cpp"
   if [ -n "$TIER" ] && ! command -v llama-server >/dev/null 2>&1; then
+    echo "  Provider: llama.cpp Android arm64 (CPU)"
     echo "  Downloading the official prebuilt Android build (fast path, ~50 MB)"
     ASSET_URL=$(curl -sL --retry 3 "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest" | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('bin-android-arm64.tar.gz')),''))" 2>/dev/null)
     if [ -n "$ASSET_URL" ]; then

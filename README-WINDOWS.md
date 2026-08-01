@@ -39,6 +39,10 @@ The setup script:
 4. Downloads the models for your tier (with progress bar and resume)
 5. Writes the config and creates the start/run scripts
 
+The engine provider is detected automatically too: an NVIDIA GPU picks the
+CUDA build (fastest on Windows), otherwise the CPU build. Override with
+`set ARYNOX_PROVIDER=cpu` / `vulkan` / `cuda` / `hip`.
+
 ### Model tiers (picked automatically from your RAM)
 
 | Tier | RAM | Models | Size |
