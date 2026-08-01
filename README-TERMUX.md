@@ -32,17 +32,18 @@ The setup script:
 
 1. Updates Termux and installs system packages
 2. Reads your phone's hardware (brand, Android version, CPU, **RAM**, free storage)
-3. Picks a model tier for your RAM (you can override)
+3. **Picks the model tier automatically** for your RAM (downgrades if storage is
+   too small; no prompts - override with `ARYNOX_TIER=pro bash setup.sh`)
 4. Downloads the prebuilt llama.cpp Android build (fast path) - or compiles it
    from source if the download fails (10-25 minutes, done only once)
 5. Downloads the models for your tier
 6. Builds whisper.cpp for offline speech-to-text and downloads its model
 7. Writes the config, creates `run.sh` / `start-local.sh`
-8. Asks for an optional Gemini API key (cloud fallback)
+8. Saves an optional Gemini API key from `ARYNOX_GEMINI_KEY` (cloud fallback)
 9. Runs a self-test (camera, mic, speech)
 
-You will be asked to **tap Allow** on camera, microphone, and storage permission
-dialogs - Android requires this and it cannot be automated.
+The only dialogs are the Android permission popups - **tap Allow** for camera,
+microphone, and storage. Everything else runs without any input.
 
 ### Model tiers (picked automatically from your RAM)
 
@@ -53,7 +54,8 @@ dialogs - Android requires this and it cannot be automated.
 | pro | 8-16 GB | 7B vision | ~5.9 GB |
 | max | 16+ GB | 7B vision, large context | ~5.9 GB |
 
-Type `none` to skip local models and use the Gemini cloud only.
+Override anytime with an env var, e.g. `ARYNOX_TIER=lite bash setup.sh`
+or `ARYNOX_TIER=none bash setup.sh` for cloud-only mode.
 
 ## Run
 

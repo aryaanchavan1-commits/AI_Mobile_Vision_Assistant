@@ -65,14 +65,36 @@ elif [ "$RAM_MB" -lt 16000 ]; then AUTO_TIER="pro"
 else AUTO_TIER="max"
 fi
 
-echo "[4/7] Local AI models (chosen for your RAM)"
+echo "[4/7] Choosing local AI models for this phone"
 echo "  lite     ~1.1 GB   text-only 1.5B model (4 GB RAM or less)"
 echo "  standard ~3.3 GB   3B vision model, sees and talks (4-8 GB RAM)"
 echo "  pro      ~5.9 GB   7B vision model (8-16 GB RAM)"
 echo "  max      ~5.9 GB   7B vision, large context (16 GB+ RAM)"
 echo "  none     no downloads, uses Gemini cloud instead"
-read -rp "  Choose tier [$AUTO_TIER]: " TIER
-TIER="${TIER:-$AUTO_TIER}"
+
+TIER="${ARYNOX_TIER:-$AUTO_TIER}"
+FORCED=0
+case "$TIER" in
+  lite|standard|pro|max) FORCED=1 ;;
+  none) TIER="" ;;
+  *)
+    echo "  Unknown ARYNOX_TIER '$TIER'. Using auto ($AUTO_TIER)."
+    TIER="$AUTO_TIER"
+    ;;
+esac
+NEED_MB=0
+case "$TIER" in
+  lite) NEED_MB=3000 ;;
+  standard) NEED_MB=6000 ;;
+  *) NEED_MB=8000 ;;
+esac
+if [ "$FORCED" -eq 0 ] && [ "${STORAGE_MB:-0}" -gt 0 ] && [ "$STORAGE_MB" -lt "$NEED_MB" ]; then
+  echo "  Not enough free storage (${STORAGE_MB} MB) for $TIER (~${NEED_MB} MB). Downgrading."
+  if [ "$STORAGE_MB" -lt 3000 ]; then TIER=""
+  elif [ "$STORAGE_MB" -lt 6000 ]; then TIER="lite"
+  else TIER="standard"; fi
+fi
+echo "  Selected: ${TIER:-none (cloud mode)}"
 
 case "$TIER" in
   lite)
@@ -111,16 +133,6 @@ case "$TIER" in
 esac
 
 if [ -n "$TIER" ]; then
-  case "$TIER" in
-    lite) NEED_MB=3000 ;;
-    standard) NEED_MB=6000 ;;
-    *) NEED_MB=8000 ;;
-  esac
-  if [ "${STORAGE_MB:-0}" -gt 0 ] && [ "$STORAGE_MB" -lt "$NEED_MB" ]; then
-    echo "  Warning: only ${STORAGE_MB} MB free, this tier needs ~${NEED_MB} MB."
-    read -rp "  Continue anyway? [y/N]: " ANS
-    [ "$ANS" = "y" ] || exit 1
-  fi
   echo "  Building the local model runtime (llama.cpp)"
   pkg install -y clang cmake make ninja git || {
     echo "  Build tools could not be installed."
@@ -288,15 +300,8 @@ EOF
 fi
 
 echo "[7/7] Gemini API key (optional, used as fallback or cloud mode)"
-python3 - <<'PY'
-import json, os
-p = os.path.expanduser("~/.arynox/config.json")
-key = json.load(open(p)).get("gemini_api_key", "")
-print("  Current key:", (key[:12] + "...") if key else "(none)")
-PY
-read -rp "  Paste a free Gemini API key from https://aistudio.google.com (Enter to skip): " KEY
-if [ -n "$KEY" ]; then
-    python3 - "$KEY" <<'PY'
+if [ -n "$ARYNOX_GEMINI_KEY" ]; then
+    python3 - "$ARYNOX_GEMINI_KEY" <<'PY'
 import json, os, sys
 p = os.path.expanduser("~/.arynox/config.json")
 c = json.load(open(p))
@@ -304,6 +309,9 @@ c["gemini_api_key"] = sys.argv[1].strip()
 json.dump(c, open(p, "w"), indent=2)
 print("  Key saved.")
 PY
+else
+    echo "  Skipped. Set ARYNOX_GEMINI_KEY to save one automatically,"
+    echo "  or add your key to ~/.arynox/config.json later."
 fi
 
 cat > "$APP_DIR/run.sh" <<'EOF'

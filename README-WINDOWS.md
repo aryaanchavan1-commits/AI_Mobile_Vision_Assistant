@@ -30,14 +30,16 @@ python setup_windows.py
 
 The setup script:
 
-1. Reads your PC's RAM and suggests a model tier
+1. Reads your PC's RAM and free storage, **picks the model tier automatically**
+   (downgrades if disk space is tight; no prompts - override with
+   `set ARYNOX_TIER=standard` before running)
 2. Creates a Python virtual environment (venv) and installs packages
    (OpenCV, sounddevice, faster-whisper, pyttsx3, ...)
 3. Downloads the official llama.cpp build
 4. Downloads the models for your tier (with progress bar and resume)
 5. Writes the config and creates the start/run scripts
 
-### Model tiers (pick by RAM)
+### Model tiers (picked automatically from your RAM)
 
 | Tier | RAM | Models | Size |
 |---|---|---|---|
@@ -46,7 +48,8 @@ The setup script:
 | pro | 8-16 GB | 7B vision | ~5.9 GB |
 | max | 16+ GB | 7B vision, large context | ~5.9 GB |
 
-Type `none` to skip local models and use the Gemini cloud only.
+Override anytime with an env var, e.g. `set ARYNOX_TIER=lite && python
+setup_windows.py` or `ARYNOX_TIER=none` for cloud-only mode.
 
 ## Run
 

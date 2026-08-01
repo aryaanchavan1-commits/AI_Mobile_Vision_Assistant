@@ -77,6 +77,27 @@ def auto_tier(ram_gb):
     return "max"
 
 
+def choose_tier(ram_gb, free, forced=None):
+    tier = (forced or "").strip().lower() or auto_tier(ram_gb)
+    if tier == "none":
+        return ""
+    if tier not in TIERS:
+        print(f"  Unknown ARYNOX_TIER '{tier}', using auto ({auto_tier(ram_gb)}).")
+        tier = auto_tier(ram_gb)
+    if forced or not free:
+        return tier
+    need = TIERS[tier]["need_mb"] / 1000
+    if free < need:
+        print(f"  Only {free} GB free, {tier} needs ~{need} GB. Downgrading.")
+        if free < 3:
+            tier = ""
+        elif free < 6:
+            tier = "lite"
+        else:
+            tier = "standard"
+    return tier
+
+
 def free_gb():
     try:
         return round(shutil.disk_usage(APP_DIR.parent).free / 1e9, 1)
@@ -373,26 +394,17 @@ def main():
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
     default_tier = auto_tier(detect_ram_gb())
-    print("  Local AI model tiers:")
+    print("  Local AI model tiers (auto-selected for this PC):")
     for t in ("lite", "standard", "pro", "max"):
         print("   ", TIERS[t]["help"])
-    tier = input(f"  Choose tier [{default_tier}] (or 'none'): ").strip().lower() or default_tier
-    if tier == "none":
-        tier = ""
-    if tier and tier not in TIERS:
-        print("Invalid tier.")
-        sys.exit(1)
+    forced = os.environ.get("ARYNOX_TIER", "").strip().lower()
+    tier = choose_tier(detect_ram_gb(), free_gb(), forced)
+    print(f"  Selected: {tier or 'none (cloud mode)'}")
 
     py = ensure_python_env()
 
     if tier:
         tier_cfg = TIERS[tier]
-        need_gb = tier_cfg["need_mb"] / 1000
-        free = free_gb()
-        if free and free < need_gb:
-            ans = input(f"  Only {free} GB free, need ~{need_gb} GB. Continue? [y/N]: ").strip().lower()
-            if ans != "y":
-                sys.exit(1)
         print("[2/5] Downloading llama.cpp")
         if not download_llama_cpp():
             print("  Falling back to cloud (Gemini) mode.")
