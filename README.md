@@ -55,6 +55,28 @@ Setup picks a tier for your RAM, downloads the llama.cpp build and models
 (resumable), then starts Arynox. Use `start.cmd` / `stop.cmd` to control it.
 Full guide: [README-WINDOWS.md](README-WINDOWS.md)
 
+### Windows desktop app (EXE)
+
+```
+cd desktop
+npm install
+npx electron-builder --win nsis      # -> dist/Arynox Setup 1.0.0.exe
+```
+
+The app detects your PC (RAM, NVIDIA GPU, OS), downloads the matching
+llama.cpp build and models, and gives you a chat + vision UI — all offline.
+
+### Android app (APK)
+
+```
+cd mobile
+gradlew assembleDebug                # -> app/build/outputs/apk/debug/app-debug.apk
+```
+
+The app detects your phone (RAM, storage, CPU), downloads the right model tier
+and the arm64 llama.cpp build, runs a local server in app storage, and gives
+you an offline chat + photo vision UI (minSdk 26, arm64-v8a).
+
 ## Model tiers
 
 | Tier  | Size   | Models                                    | Best for      |
@@ -86,6 +108,8 @@ Full guide: [README-WINDOWS.md](README-WINDOWS.md)
 main.py                  entry point (--demo self-test, --once single listen)
 setup.sh                 Termux installer (Android)
 setup_windows.py         Windows / WSL installer
+desktop/                 Electron app (system detection, chat + vision UI)
+mobile/                  Kotlin Android app (system detection, chat + vision UI)
 arynox/
   brain.py               conversation loop, intent routing
   vision.py              camera capture + scene-change detection

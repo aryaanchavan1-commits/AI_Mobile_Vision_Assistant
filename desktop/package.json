@@ -1,0 +1,36 @@
+{
+  "name": "arynox-desktop",
+  "version": "1.0.0",
+  "description": "Arynox Brain - on-device AI vision assistant (Windows/Linux)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "author": "Aryan Chavan",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.arynox.desktop",
+    "productName": "Arynox",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**",
+      "arynox/**",
+      "main.py",
+      "config.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true
+    }
+  }
+}

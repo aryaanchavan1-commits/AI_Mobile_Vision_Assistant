@@ -1,3 +1,15 @@
 __pycache__/
 *.pyc
 .arynox/
+
+# Electron desktop app
+desktop/node_modules/
+desktop/dist/
+desktop/package-lock.json
+
+# Android app
+mobile/.gradle/
+mobile/build/
+mobile/app/build/
+mobile/local.properties
+mobile/.kotlin/

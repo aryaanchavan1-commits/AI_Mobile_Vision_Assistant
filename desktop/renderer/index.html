@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arynox</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Arynox</h1>
+    <span id="status" class="status">detecting...</span>
+    <div id="actions">
+      <button id="btn-install" class="hidden">Install models</button>
+      <button id="btn-start" class="hidden">Start</button>
+      <button id="btn-stop" class="hidden">Stop</button>
+    </div>
+  </header>
+
+  <section id="info" class="card">
+    <div id="sysinfo"></div>
+    <div class="progress hidden">
+      <div id="progress-label"></div>
+      <div class="bar"><div id="progress-bar"></div></div>
+      <div id="progress-text"></div>
+    </div>
+    <pre id="log"></pre>
+  </section>
+
+  <section id="chat" class="card hidden">
+    <div id="messages"></div>
+    <div class="row">
+      <input id="input" type="text" placeholder="Type a message... (e.g. what do you see)" disabled />
+      <button id="btn-send" disabled>Send</button>
+    </div>
+  </section>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
