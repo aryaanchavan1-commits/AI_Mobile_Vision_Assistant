@@ -92,7 +92,7 @@ class ArynoxBrain:
         low = text.lower()
 
         if re.search(r"go to sleep|\b(?:stop|exit|quit|shutdown|goodbye)\b", low):
-            self.speak("Stopping. Type bash run.sh start to wake me up.")
+            self.speak("Stopping. Type start to wake me up.")
             return STOPPED
 
         m = re.search(

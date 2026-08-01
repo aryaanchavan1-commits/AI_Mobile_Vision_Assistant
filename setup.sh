@@ -343,17 +343,12 @@ grep -q 'alias stop=' "$HOME/.bashrc" 2>/dev/null || echo 'alias stop="bash '"$A
 
 echo
 echo "Setup complete."
-echo "To start Arynox later, just type:    start"
-echo "To stop it, say 'stop' to Arynox, or type: stop"
-echo "Status check: bash ~/.arynox/run.sh status"
-echo "Config file:  ~/.arynox/config.json"
-echo
-echo "Starting Arynox..."
-exec bash "$APP_DIR/run.sh" start
-echo
 echo "Offline capability:"
 echo "  - Vision + chat: llama-server (on-device)"
 echo "  - Speech to text: whisper-cli (on-device)"
 echo "  - Text to speech: Android engine, espeak-ng fallback"
 echo "  - Memory: SQLite + local embeddings"
 echo "Internet is only needed for the first download."
+echo
+echo "Starting Arynox..."
+exec bash "$APP_DIR/run.sh" start
