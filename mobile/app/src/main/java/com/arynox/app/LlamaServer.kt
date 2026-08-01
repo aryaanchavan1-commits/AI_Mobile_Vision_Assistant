@@ -41,6 +41,9 @@ object LlamaServer {
         if (found != null && found.absolutePath != File(destDir, SERVER).absolutePath) {
             found.copyTo(File(destDir, SERVER), overwrite = true)
         }
+        destDir.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".so") }
+            .forEach { it.copyTo(File(destDir, it.name), overwrite = true) }
     }
 
     fun chmod(file: File): Boolean {
