@@ -15,3 +15,4 @@ mobile/local.properties
 mobile/.kotlin/
 mobile/key.properties
 mobile/keystore/
+backup-keys/
