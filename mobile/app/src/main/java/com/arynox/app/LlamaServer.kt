@@ -19,6 +19,8 @@ object LlamaServer {
         .readTimeout(300, TimeUnit.SECONDS)
         .build()
     private var process: Process? = null
+    private var embedProc: Process? = null
+    val lastOutput = mutableListOf<String>()
 
     fun extractTarGz(archive: File, destDir: File) {
         destDir.mkdirs()
@@ -58,7 +60,9 @@ object LlamaServer {
     fun start(modelsDir: File, llamaDir: File, ctx: Int): Boolean {
         val exe = File(llamaDir, SERVER)
         if (!exe.exists() || !exe.canExecute()) return false
-        val llm = modelsDir.listFiles()?.firstOrNull { it.name.startsWith("Qwen") } ?: return false
+        val llm = modelsDir.listFiles()
+            ?.firstOrNull { it.name.endsWith(".gguf") && it.name.startsWith("Qwen", ignoreCase = true) }
+            ?: return false
         val mm = File(modelsDir, "mmproj-F16.gguf")
         val cmd = mutableListOf(exe.absolutePath, "-m", llm.absolutePath)
         if (mm.exists()) cmd += listOf("--mmproj", mm.absolutePath)
@@ -67,11 +71,59 @@ object LlamaServer {
         val pb = ProcessBuilder(cmd)
         pb.redirectErrorStream(true)
         process = try {
-            pb.start()
+            pb.start().also { drainProc(it) }
         } catch (_: Exception) {
             return false
         }
         return true
+    }
+
+    fun startEmbed(modelsDir: File, llamaDir: File): Boolean {
+        val exe = File(llamaDir, SERVER)
+        val bge = File(modelsDir, "bge-small-en-v1.5-q4_k_m.gguf")
+        if (!exe.exists() || !bge.exists() || embedProc != null) return false
+        val cmd = listOf(exe.absolutePath, "-m", bge.absolutePath, "--embeddings",
+            "--pooling", "mean", "-c", "512", "-n", "1",
+            "--host", "127.0.0.1", "--port", "8081")
+        val pb = ProcessBuilder(cmd)
+        pb.redirectErrorStream(true)
+        return try {
+            pb.start().also { embedProc = it; drainProc(it) }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun drainProc(p: Process) {
+        Thread {
+            val reader = p.inputStream.bufferedReader()
+            while (true) {
+                val line = reader.readLine() ?: break
+                synchronized(lastOutput) {
+                    lastOutput.add(line)
+                    if (lastOutput.size > 40) lastOutput.removeAt(0)
+                }
+            }
+        }.isDaemon = true
+    }
+
+    fun embedText(text: String): FloatArray? {
+        try {
+            val body = JSONObject().put("content", text).toString()
+            val req = Request.Builder()
+                .url("http://127.0.0.1:8081/embeddings")
+                .post(body.toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.code != 200) return null
+                val json = JSONObject(resp.body?.string() ?: return null)
+                val arr = json.getJSONArray("data").getJSONObject(0).getJSONArray("embedding")
+                return FloatArray(arr.length()) { arr.getDouble(it).toFloat() }
+            }
+        } catch (_: Exception) {
+            return null
+        }
     }
 
     fun healthy(timeoutMs: Long = 120_000): Boolean {
@@ -116,5 +168,13 @@ object LlamaServer {
         } catch (_: Exception) {
         }
         process = null
+        try {
+            embedProc?.destroy()
+        } catch (_: Exception) {
+        }
+        embedProc = null
+        synchronized(lastOutput) {
+            lastOutput.clear()
+        }
     }
 }

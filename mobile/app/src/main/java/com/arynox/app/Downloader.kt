@@ -3,6 +3,7 @@ package com.arynox.app
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 
 object Downloader {
@@ -25,7 +26,7 @@ object Downloader {
             var written = if (append) existing else 0L
             val total = written + (body.contentLength().coerceAtLeast(0))
             body.byteStream().use { input ->
-                dest.outputStream().use { out ->
+                FileOutputStream(dest, append).use { out ->
                     val buf = ByteArray(1 shl 20)
                     while (true) {
                         val n = input.read(buf)

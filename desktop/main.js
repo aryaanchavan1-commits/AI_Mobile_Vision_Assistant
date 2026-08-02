@@ -303,7 +303,9 @@ function healthCheck(url, timeoutMs = 120000) {
 function startLlamaServer(tier) {
   const ctx = tier === "lite" ? 2048 : tier === "standard" ? 4096 : 8192;
   const exe = path.join(LLAMA_DIR, SERVER_NAME);
-  const llm = fs.readdirSync(MODELS_DIR).find((f) => f.endsWith(".gguf") && f.startsWith("Qwen"));
+  const llm = fs.readdirSync(MODELS_DIR).find(
+    (f) => f.endsWith(".gguf") && f.toLowerCase().startsWith("qwen")
+  );
   const mm = fs.existsSync(path.join(MODELS_DIR, "mmproj-F16.gguf"));
   const emb = fs.existsSync(path.join(MODELS_DIR, "bge-small-en-v1.5-q4_k_m.gguf"));
   const args = ["-m", path.join(MODELS_DIR, llm)];
