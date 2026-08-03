@@ -1,12 +1,15 @@
 package com.arynox.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -16,7 +19,15 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,10 +48,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.Icon
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -61,16 +71,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 val Bg = Color(0xFF0F1117)
 val Surface1 = Color(0xFF1B1F2A)
@@ -79,6 +94,7 @@ val Accent2 = Color(0xFF8AB4F8)
 val Green = Color(0xFF34D399)
 val Red = Color(0xFFF87171)
 val Amber = Color(0xFFFBBF24)
+val Edge = Color(0xFF2A3040)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -103,20 +119,143 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
     val progress by vm.installProgress.collectAsState()
     val typing by vm.typing.collectAsState()
     val ttsEnabled by vm.ttsEnabled.collectAsState()
+    val listenEnabled by vm.listenEnabled.collectAsState()
+    val visionEnabled by vm.visionEnabled.collectAsState()
+    val liveCaption by vm.liveCaption.collectAsState()
+    val webNote by vm.webNote.collectAsState()
+    val speaking by vm.speaking.collectAsState()
     var input by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var listening by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val listState = rememberLazyListState()
+    val handler = remember { Handler(Looper.getMainLooper()) }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    var camOk by remember { mutableStateOf(false) }
+    var micOk by remember { mutableStateOf(false) }
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { r ->
+        camOk = r[Manifest.permission.CAMERA] == true
+        micOk = r[Manifest.permission.RECORD_AUDIO] == true
+    }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 23) {
+            permLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
+        }
     }
 
-    val cameraFile = remember { File(context.cacheDir, "capture.jpg") }
+    // ---- Camera: live preview + periodic capture for the vision loop ----
+    val previewView = remember { PreviewView(context) }
+    var cameraReady by remember { mutableStateOf(false) }
+    var cameraCapture by remember { mutableStateOf<ImageCapture?>(null) }
+    val providerFuture = remember { ProcessCameraProvider.getInstance(context) }
+    LaunchedEffect(Unit) {
+        providerFuture.addListener({
+            try {
+                val provider = providerFuture.get()
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+                val capture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .build()
+                provider.unbindAll()
+                provider.bindToLifecycle(
+                    lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+                cameraCapture = capture
+                cameraReady = true
+            } catch (_: Exception) {
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+    LaunchedEffect(cameraReady, phase, visionEnabled) {
+        while (isActive && cameraReady && phase is ChatViewModel.Phase.Running && visionEnabled) {
+            val cap = cameraCapture
+            if (cap != null) {
+                cap.takePicture(ContextCompat.getMainExecutor(context),
+                    object : ImageCapture.OnImageCapturedCallback() {
+                        override fun onCaptureSuccess(image: ImageProxy) {
+                            try {
+                                val bmp = image.toBitmap()
+                                val scaled = scaleDown(bmp, 720)
+                                val stream = ByteArrayOutputStream()
+                                scaled.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+                                val b64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+                                if (b64.isNotEmpty()) vm.onVisionFrame(b64)
+                            } catch (_: Exception) {
+                            } finally {
+                                image.close()
+                            }
+                        }
 
-    val sendImage = { uri: Uri, text: String ->
-        busy = true
+                        override fun onError(exception: ImageCaptureException) {}
+                    })
+            }
+            delay(8000)
+        }
+    }
+
+    // ---- Always listening: continuous speech recognition ----
+    val recognizeIntent = remember {
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        }
+    }
+    var recognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
+    val restartListen: () -> Unit = remember {
+        {
+            val sr = recognizer
+            if (sr != null && micOk && listenEnabled &&
+                phase is ChatViewModel.Phase.Running && !speaking
+            ) {
+                try {
+                    sr.startListening(recognizeIntent)
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+    LaunchedEffect(micOk) {
+        if (micOk) {
+            val sr = SpeechRecognizer.createSpeechRecognizer(context)
+            recognizer = sr
+            sr.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {}
+                override fun onError(error: Int) {
+                    handler.postDelayed(restartListen, 900)
+                }
+                override fun onResults(results: Bundle?) {
+                    val text = results
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                    if (!text.isNullOrEmpty()) vm.send(text)
+                    handler.postDelayed(restartListen, 900)
+                }
+                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+        } else {
+            recognizer?.destroy()
+            recognizer = null
+        }
+    }
+    LaunchedEffect(listenEnabled, speaking, phase, micOk) {
+        if (micOk && listenEnabled && phase is ChatViewModel.Phase.Running && !speaking) {
+            handler.postDelayed(restartListen, 400)
+        } else {
+            recognizer?.cancel()
+        }
+    }
+
+    // ---- Camera / gallery / mic for chat input ----
+    val cameraFile = remember { File(context.cacheDir, "capture.jpg") }
+    val sendImage: (Uri, String) -> Unit = { uri, text ->
         val bytes = try {
             val stream = ByteArrayOutputStream()
             val bmp = BitmapFactory.decodeStream(context.contentResolver.openInputStream(uri))
@@ -127,28 +266,21 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
         } catch (_: Exception) {
             null
         }
-        if (bytes != null) {
-            vm.send(text, Base64.encodeToString(bytes, Base64.NO_WRAP))
-        } else {
-            vm.log("Could not read that image.")
-        }
-        busy = false
+        if (bytes != null) vm.send(text, Base64.encodeToString(bytes, Base64.NO_WRAP))
+        else vm.log("Could not read that image.")
     }
-
     val photoPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        if (uri != null && !busy) sendImage(uri, input.ifEmpty { "What do you see here?" })
+        if (uri != null) sendImage(uri, input.ifEmpty { "What do you see here?" })
         input = ""
     }
-
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
     ) { ok ->
-        if (ok && !busy) sendImage(Uri.fromFile(cameraFile), input.ifEmpty { "What do you see here?" })
+        if (ok) sendImage(Uri.fromFile(cameraFile), input.ifEmpty { "What do you see here?" })
         input = ""
     }
-
     val camPerm = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -156,11 +288,25 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
         else vm.log("Camera permission denied.")
     }
 
-    val micPerm = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) startListening(context, vm) { s -> listening = s }
-        else vm.log("Microphone permission denied.")
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    }
+
+    val running = phase is ChatViewModel.Phase.Running
+    val statusText = when {
+        phase is ChatViewModel.Phase.Running ->
+            if (listenEnabled && visionEnabled) "● fully awake - sees, hears & remembers"
+            else "● online"
+        phase is ChatViewModel.Phase.Download -> "… downloading"
+        phase is ChatViewModel.Phase.Start -> "… starting"
+        phase is ChatViewModel.Phase.Error -> "! needs attention"
+        else -> "○ offline"
+    }
+    val statusColor = when {
+        phase is ChatViewModel.Phase.Running -> Green
+        phase is ChatViewModel.Phase.Download || phase is ChatViewModel.Phase.Start -> Amber
+        phase is ChatViewModel.Phase.Error -> Red
+        else -> Color.Gray
     }
 
     Column(
@@ -168,7 +314,7 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(Color(0xFF12151E), Bg)))
     ) {
-        // Header
+        // ---- Header ----
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -177,43 +323,159 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
         ) {
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(13.dp))
                     .background(Brush.linearGradient(listOf(Accent, Accent2))),
                 contentAlignment = Alignment.Center
             ) {
-                Text("A", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Text("A", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 22.sp)
             }
             Spacer(Modifier.width(12.dp))
             Column {
                 Text("ARYNOX", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Text(
-                    when (phase) {
-                        is ChatViewModel.Phase.Running -> "● online - I see, hear & remember"
-                        is ChatViewModel.Phase.Download -> "… downloading"
-                        is ChatViewModel.Phase.Start -> "… starting"
-                        is ChatViewModel.Phase.Error -> "! needs attention"
-                        else -> "○ offline"
-                    },
-                    color = when (phase) {
-                        is ChatViewModel.Phase.Running -> Green
-                        is ChatViewModel.Phase.Download, is ChatViewModel.Phase.Start -> Amber
-                        is ChatViewModel.Phase.Error -> Red
-                        else -> Color.Gray
-                    },
-                    fontSize = 12.sp
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(statusText, color = statusColor, fontSize = 11.5.sp)
+                    if (webNote != null) {
+                        Spacer(Modifier.width(6.dp))
+                        Text("🌐", fontSize = 11.sp)
+                    }
+                }
             }
             Spacer(Modifier.weight(1f))
             if (installed) {
                 Text("tier: $tier", color = Accent2, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             }
             IconButton(onClick = { vm.toggleTts() }) {
-                Text(if (ttsEnabled) "🔊" else "🔇", fontSize = 18.sp)
+                Text(if (ttsEnabled) "🔊" else "🔇", fontSize = 17.sp)
             }
         }
 
-        // Progress card
+        // ---- Live camera card ----
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .height(210.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .border(1.dp, Edge, RoundedCornerShape(20.dp))
+        ) {
+            if (camOk) {
+                AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+                // bottom scrim + live caption
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, Color(0xCC000000))
+                            )
+                        )
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Column {
+                        Text(
+                            if (running && visionEnabled) {
+                                if (liveCaption.isNotBlank()) "👁 AI: $liveCaption" else "👁 AI is watching..."
+                            } else if (running) "👁 vision paused" else "👁 camera ready",
+                            color = Color.White, fontSize = 12.sp, maxLines = 2
+                        )
+                    }
+                }
+                if (!running) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0x99000000)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("AI offline - camera preview", color = Color(0xFF9CA3AF), fontSize = 13.sp)
+                    }
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFF141824)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Camera permission needed\nfor 24/7 vision",
+                        color = Color(0xFF9CA3AF), fontSize = 13.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+
+        // ---- Mode toggles ----
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(
+                selected = listenEnabled,
+                onClick = { vm.toggleListen() },
+                enabled = micOk,
+                label = { Text(if (listenEnabled) "👂 Always listening" else "👂 Hearing off", fontSize = 12.sp) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Accent,
+                    selectedLabelColor = Color.White,
+                    containerColor = Surface1,
+                    labelColor = Color(0xFF9CA3AF)
+                )
+            )
+            FilterChip(
+                selected = visionEnabled,
+                onClick = { vm.toggleVision() },
+                enabled = camOk,
+                label = { Text(if (visionEnabled) "📷 Vision 24/7" else "📷 Vision off", fontSize = 12.sp) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Accent,
+                    selectedLabelColor = Color.White,
+                    containerColor = Surface1,
+                    labelColor = Color(0xFF9CA3AF)
+                )
+            )
+        }
+
+        // ---- Action button (auto runs, but keep manual control) ----
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (!installed) {
+                Button(
+                    onClick = { vm.install() },
+                    enabled = phase !is ChatViewModel.Phase.Download,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
+                ) {
+                    Text(if (phase is ChatViewModel.Phase.Download) "Installing..." else "⬇ Install AI")
+                }
+            } else {
+                if (running) {
+                    Button(
+                        onClick = { vm.stop() },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Red)
+                    ) { Text("■ Stop") }
+                } else {
+                    Button(
+                        onClick = { vm.start() },
+                        enabled = phase !is ChatViewModel.Phase.Start,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Green)
+                    ) { Text("▶ Start AI") }
+                }
+            }
+        }
+
+        // ---- Download progress ----
         if (progress != null) {
             Surface(
                 modifier = Modifier
@@ -224,7 +486,8 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
             ) {
                 Column(Modifier.padding(12.dp)) {
                     Row {
-                        Text(progress!!.first, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        Text(progress!!.first, color = Color.White, fontSize = 13.sp,
+                            modifier = Modifier.weight(1f))
                         Text("${(progress!!.second * 100).toInt()}%", color = Accent2, fontSize = 13.sp)
                     }
                     Spacer(Modifier.height(8.dp))
@@ -235,46 +498,13 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
                             .height(6.dp)
                             .clip(RoundedCornerShape(3.dp)),
                         color = Accent,
-                        trackColor = Color(0xFF2A3040)
+                        trackColor = Edge
                     )
                 }
             }
         }
 
-        // Action buttons
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (!installed) {
-                Button(
-                    onClick = { vm.install() },
-                    enabled = phase !is ChatViewModel.Phase.Download && phase !is ChatViewModel.Phase.Error,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
-                ) {
-                    Text("⬇ Install AI (${Models.TIERS[tier]?.needGb ?: 5} GB)")
-                }
-            } else {
-                if (phase is ChatViewModel.Phase.Running) {
-                    Button(
-                        onClick = { vm.stop() },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Red)
-                    ) { Text("■ Stop") }
-                } else {
-                    Button(
-                        onClick = { vm.start() },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Green)
-                    ) { Text("▶ Start AI") }
-                }
-            }
-        }
-
-        // Logs while not chatting yet
+        // ---- Logs / chat area ----
         if (messages.isEmpty()) {
             LazyColumn(
                 modifier = Modifier
@@ -293,7 +523,6 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
                 }
             }
         } else {
-            // Chat
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -337,7 +566,7 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
             }
         }
 
-        // Input bar
+        // ---- Input bar ----
         Surface(
             modifier = Modifier.fillMaxWidth(),
             color = Surface1
@@ -348,20 +577,13 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    FilledIconButton(
-                        onClick = {
-                            val p = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
-                            if (p == PackageManager.PERMISSION_GRANTED) {
-                                startListening(context, vm) { s -> listening = s }
-                            } else {
-                                micPerm.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                        },
-                        enabled = phase is ChatViewModel.Phase.Running && !busy,
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = if (listening) Red else Color(0xFF2A3040))
-                    ) { Text(if (listening) "🟥" else "🎤", fontSize = 16.sp) }
-                    FilledIconButton(
+                    IconButton(
+                        onClick = { vm.toggleListen() },
+                        enabled = running && micOk
+                    ) {
+                        Text(if (listenEnabled) "🎤" else "🔇", fontSize = 18.sp)
+                    }
+                    IconButton(
                         onClick = {
                             val p = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
                             if (p == PackageManager.PERMISSION_GRANTED) {
@@ -370,16 +592,15 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
                                 camPerm.launch(Manifest.permission.CAMERA)
                             }
                         },
-                        enabled = phase is ChatViewModel.Phase.Running && !busy,
-                        colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFF2A3040))
-                    ) { Text("📷", fontSize = 16.sp) }
-                    FilledIconButton(
+                        enabled = running
+                    ) { Text("📷", fontSize = 18.sp) }
+                    IconButton(
                         onClick = {
-                            photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            photoPicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         },
-                        enabled = phase is ChatViewModel.Phase.Running && !busy,
-                        colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFF2A3040))
-                    ) { Text("🖼", fontSize = 16.sp) }
+                        enabled = running
+                    ) { Text("🖼", fontSize = 18.sp) }
                     OutlinedTextField(
                         value = input,
                         onValueChange = { input = it },
@@ -387,7 +608,7 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
                         placeholder = { Text("Ask me anything...", color = Color.Gray) },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Accent,
-                            unfocusedBorderColor = Color(0xFF2A3040),
+                            unfocusedBorderColor = Edge,
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White,
                             cursorColor = Accent
@@ -399,7 +620,7 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
                             vm.send(input)
                             input = ""
                         },
-                        enabled = phase is ChatViewModel.Phase.Running && input.isNotBlank() && !busy,
+                        enabled = running && input.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(containerColor = Accent),
                         shape = RoundedCornerShape(12.dp)
                     ) { Text("Send") }
@@ -415,21 +636,21 @@ fun ArynoxApp(vm: ChatViewModel = viewModel()) {
                         "Remember this as Sam" to "Save a face from a photo.",
                         "Who is Sam?" to "Recall a memory.",
                         "What can you do?" to "Help.",
-                    ).forEach { (label, hint) ->
+                    ).forEach { (label, _) ->
                         TextButton(
                             onClick = { input = label },
-                            enabled = phase is ChatViewModel.Phase.Running
+                            enabled = running
                         ) { Text(label, color = Accent2, fontSize = 12.sp) }
                     }
                 }
                 Text(
-                    "100% offline • models stored on your phone",
+                    "Always on • on-device AI • web search when needed",
                     color = Color(0xFF6B7280),
                     fontSize = 10.sp,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 4.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    textAlign = TextAlign.Center
                 )
             }
         }
@@ -444,47 +665,6 @@ private fun launchCamera(
     val uri = FileProvider.getUriForFile(
         context, "${context.packageName}.fileprovider", file)
     launcher.launch(uri)
-}
-
-private fun startListening(
-    context: android.content.Context,
-    vm: ChatViewModel,
-    setListening: (Boolean) -> Unit
-) {
-    val sr = SpeechRecognizer.createSpeechRecognizer(context)
-    sr.setRecognitionListener(object : RecognitionListener {
-        override fun onReadyForSpeech(params: android.os.Bundle?) {}
-        override fun onBeginningOfSpeech() { setListening(true) }
-        override fun onRmsChanged(rmsdB: Float) {}
-        override fun onBufferReceived(buffer: ByteArray?) {}
-        override fun onEndOfSpeech() {}
-        override fun onError(error: Int) {
-            setListening(false)
-            sr.destroy()
-        }
-        override fun onResults(results: android.os.Bundle?) {
-            setListening(false)
-            sr.destroy()
-            val text = results
-                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.firstOrNull()
-            if (!text.isNullOrEmpty()) vm.send(text)
-        }
-        override fun onPartialResults(partialResults: android.os.Bundle?) {}
-        override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
-    })
-    val intent = android.content.Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
-        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-    }
-    try {
-        sr.startListening(intent)
-    } catch (_: Exception) {
-        setListening(false)
-        sr.destroy()
-        vm.log("Voice input unavailable on this device.")
-    }
 }
 
 private fun scaleDown(bmp: Bitmap?, maxDim: Int): Bitmap {

@@ -60,7 +60,7 @@ Full guide: [README-WINDOWS.md](README-WINDOWS.md)
 ```
 cd desktop
 npm install
-npx electron-builder --win nsis      # -> dist/Arynox-Setup-1.1.0.exe
+npx electron-builder --win nsis      # -> dist/Arynox-Setup-1.2.0.exe
 ```
 
 The app detects your PC (RAM, NVIDIA GPU, OS), downloads the matching

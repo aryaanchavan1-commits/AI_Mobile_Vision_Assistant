@@ -10,6 +10,7 @@ const DATA_DIR = path.join(os.homedir(), ".arynox");
 const MODELS_DIR = path.join(DATA_DIR, "models");
 const LLAMA_DIR = path.join(DATA_DIR, "llama");
 const APP_DIR = path.join(DATA_DIR, "app");
+const EXA_API_KEY = "6bcaffb7-40d4-4bed-a394-a9ca245786ec";
 
 const TIERS = {
   lite: {
@@ -380,6 +381,64 @@ async function chatOpenAI(messages) {
   });
 }
 
+async function exaSearch(query) {
+  try {
+    const resp = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: {
+        "x-api-key": EXA_API_KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query,
+        numResults: 5,
+        contents: { text: { maxCharacters: 500 } },
+      }),
+      signal: AbortSignal.timeout(25000),
+    });
+    if (!resp.ok) return `(web search failed: HTTP ${resp.status})`;
+    const data = await resp.json();
+    const results = data.results || [];
+    if (results.length === 0) return "(no results found)";
+    return results
+      .slice(0, 5)
+      .map((r) => `- ${r.title}\n${r.url}\n${(r.contents && r.contents.text ? r.contents.text : "").slice(0, 450)}`)
+      .join("\n\n");
+  } catch (e) {
+    return `(web search error: ${e.message})`;
+  }
+}
+
+async function chatWithSearch(text, imageB64) {
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You are Arynox, a warm, concise AI companion on the user's PC. Answer in 1-3 short sentences. If you do not know the answer or need fresh data, reply with exactly one line: [SEARCH: your search query]",
+    },
+    ...(imageB64
+      ? [{ role: "user", content: [{ type: "text", text }, { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageB64}` } }] }]
+      : [{ role: "user", content: text }]),
+  ];
+  let reply = await chatOpenAI(messages);
+  const m = reply.match(/\[SEARCH:\s*([^\]]+)\]/i);
+  if (m) {
+    const query = m[1].trim();
+    log("info", `Web search: ${query}`);
+    const results = await exaSearch(query);
+    const follow = await chatOpenAI([
+      {
+        role: "system",
+        content:
+          "Answer the user's question using this web research. Summarize the facts and add the source links at the end.",
+      },
+      { role: "user", content: `User question: ${text}\n\nWeb research for "${query}":\n${results}` },
+    ]);
+    reply = follow;
+  }
+  return reply;
+}
+
 function stopAll() {
   if (pythonProc) { pythonProc.kill(); pythonProc = null; }
   if (serverProc) {
@@ -421,10 +480,7 @@ ipcMain.handle("start", async () => {
 ipcMain.handle("stop", () => { stopAll(); return { ok: true }; });
 ipcMain.handle("chat", async (_e, text) => {
   try {
-    const reply = await chatOpenAI([
-      { role: "system", content: "You are Arynox, a friendly concise AI companion. Answer in 2-4 short sentences." },
-      { role: "user", content: text },
-    ]);
+    const reply = await chatWithSearch(text);
     return { ok: true, mode: "llama", reply };
   } catch (err) {
     return { ok: false, error: String(err) };
