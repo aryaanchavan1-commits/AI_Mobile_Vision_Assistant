@@ -22,6 +22,8 @@ import java.util.concurrent.TimeUnit
 
 data class ChatMsg(val role: String, val text: String)
 
+data class MemoryItem(val name: String, val desc: String, val time: Long)
+
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val ctx = app
     private val modelsDir = File(app.filesDir, "models")
@@ -56,6 +58,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val speaking = MutableStateFlow(false)
     val liveCaption = MutableStateFlow("")
     val webNote = MutableStateFlow<String?>(null)
+    val memories = MutableStateFlow<List<MemoryItem>>(emptyList())
+    val toast = MutableStateFlow<String?>(null)
 
     private val history = JSONArray()
     private var lastImageB64: String? = null
@@ -69,6 +73,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         memory.load()
+        refreshMemories()
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 val t = Detector.tier(ctx)
@@ -98,6 +103,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun log(s: String) {
         logs.value = logs.value + s
+    }
+
+    fun showToast(s: String) {
+        toast.value = s
+    }
+
+    fun refreshMemories() {
+        memories.value = memory.list().map { MemoryItem(it.name, it.desc, it.time) }
+    }
+
+    fun removeMemory(name: String) {
+        if (memory.remove(name)) {
+            refreshMemories()
+            showToast("Forgotten $name")
+        }
     }
 
     fun speak(text: String) {
@@ -280,6 +300,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val desc = rememberDesc.groupValues[2].trim()
             val emb = LlamaServer.embedText(desc)
             memory.add(name, desc, emb)
+            refreshMemories()
             return "Done. I'll remember $name - $desc"
         }
 
@@ -381,6 +402,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             imageB64)) ?: "(photo saved, no description)"
         val emb = LlamaServer.embedText(desc)
         memory.add(name, desc, emb)
+        refreshMemories()
         return "Done. I'll remember $name: $desc"
     }
 
